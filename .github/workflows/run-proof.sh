@@ -37,7 +37,6 @@ Date.now = () => {
 // real `launchctl` child process. We only observe the *settle behaviour* of the
 // production retry loop under a wall-clock jump.
 const { bootstrapLaunchAgentOrThrow } = await import("./src/daemon/launchd-runtime.ts");
-const abort = new AbortController();
 let outcome = "pending";
 const start = performance.now();
 bootstrapLaunchAgentOrThrow({
@@ -46,7 +45,6 @@ bootstrapLaunchAgentOrThrow({
   plistPath: "/tmp/probe.plist",
   actionHint: "macos-real-transport-proof",
   retryPendingTeardown: true,
-  deadline: { remainingMs: () => Infinity, signal: abort.signal },
 }).then(
   () => { outcome = "resolved"; },
   (e: any) => { outcome = "rejected:" + (e.message || e); },
@@ -55,10 +53,10 @@ bootstrapLaunchAgentOrThrow({
 if (DIR === "forward") {
   // Forward jump: a wall-clock deadline drops remaining budget to <=0 and fails
   // spuriously ~instantly; the monotonic deadline keeps retrying on the real
-  // transport. Observe 2.5s.
+  // transport. Observe 2.5s, then exit.
   await new Promise((r) => setTimeout(r, 2500));
   console.log(`VERDICT[${VARIANT}][forward +1e6ms] outcome@2.5s = ${outcome}`);
-  abort.abort();
+  process.exit(0);
 } else {
   // Backward jump: wait for the loop to settle at the monotonic deadline (~70s).
   // The wall-clock variant inflates the budget by the rollback amount (+5s).
@@ -66,9 +64,7 @@ if (DIR === "forward") {
   const elapsed = Math.round(performance.now() - start);
   console.log(`VERDICT[${VARIANT}][backward -5000ms] settled in ${elapsed}ms real`);
   console.log(`  outcome = ${outcome}`);
-  abort.abort();
 }
-setTimeout(() => process.exit(0), 200);
 SCRIPT
 
 echo "--- forward wall jump +1,000,000ms ---"
