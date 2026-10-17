@@ -4,10 +4,10 @@ on:
 jobs:
   probe:
     runs-on: macos-14
-    shell: bash
     steps:
       - uses: actions/checkout@v4
       - name: Probe user-domain EIO + clock
+        shell: bash
         run: |
           set +e
           UID_NUM=$(id -u)
