@@ -1,0 +1,35 @@
+name: macOS Probe (launchctl feasibility)
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe environment
+        run: |
+          set -x
+          whoami
+          id -u
+          echo "=== launchctl version ==="
+          launchctl version 2>&1 || echo "launchctl failed"
+          echo "=== can bootstrap gui domain? ==="
+          UID_NUM=$(id -u)
+          cat > /tmp/probe.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>Label</key><string>ai.openclaw.probe</string>
+            <key>ProgramArguments</key><array><string>/bin/sleep</string><string>30</string></array>
+          </dict>
+          </plist>
+          PLIST
+          echo "=== bootstrap gui/\$UID ==="
+          launchctl bootstrap "gui/$UID_NUM" /tmp/probe.plist 2>&1; echo "bootstrap-gui exit=$?"
+          echo "=== bootstrap user/\$UID ==="
+          launchctl bootstrap "user/$UID_NUM" /tmp/probe.plist 2>&1; echo "bootstrap-user exit=$?"
+          echo "=== clock change test (sudo date) ==="
+          sudo -n date -u -s "2026-10-17 12:00:00" 2>&1 && echo "date-change OK" || echo "date-change FAILED (no sudo nopasswd)"
+          echo "=== systemsetup network time off ==="
+          sudo -n systemsetup -setusingnetworktime off 2>&1 | tail -1 || echo "systemsetup failed"
