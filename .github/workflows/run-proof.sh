@@ -43,7 +43,7 @@ PY2
     });
     console.log("RESULT resolved");
   } catch (e:any) { console.log("RESULT threw:", e.message); }
-  SCRIPT
+SCRIPT
   UID_NUM=$UID_NUM node --import tsx/esm ./dbg.ts 2>&1 | grep -E "\[DBG\]|RESULT" | head -12
   rm -f dbg.ts
   git checkout -- src/daemon/launchd-runtime.ts
