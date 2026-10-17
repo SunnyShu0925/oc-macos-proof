@@ -40,15 +40,15 @@ jobs:
         with:
           repository: SunnyShu0925/oc-macos-proof
           ref: main
-          path: /tmp/proofrepo
+          path: proofrepo
           fetch-depth: 1
       - name: Run proof OLD variant (Date.now deadline)
         shell: bash
         env:
           VARIANT: OLD
-        run: bash /tmp/proofrepo/.github/workflows/run-proof.sh
+        run: bash proofrepo/.github/workflows/run-proof.sh
       - name: Run proof FIXED variant (performance.now deadline)
         shell: bash
         env:
           VARIANT: FIXED
-        run: bash /tmp/proofrepo/.github/workflows/run-proof.sh
+        run: bash proofrepo/.github/workflows/run-proof.sh
