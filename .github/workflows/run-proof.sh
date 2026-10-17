@@ -15,7 +15,7 @@ fi
 UID_NUM="$(id -u)"
 export UID_NUM VARIANT
 
-cat > /tmp/macos-proof.ts <<'SCRIPT'
+cat > macos-proof.ts <<'SCRIPT'
 const VARIANT = process.env.VARIANT || "FIXED";
 const UID = process.env.UID_NUM!;
 const DIR = process.env.WALL_DIR || "forward";
@@ -79,11 +79,12 @@ setTimeout(() => process.exit(0), 200);
 SCRIPT
 
 echo "--- forward wall jump +1,000,000ms ---"
-DIR=forward WALL_JUMP_MS=1000000 node --import tsx/esm /tmp/macos-proof.ts 2>&1 | grep -E "VERDICT|bootstrap calls|poll gaps|outcome|settled" | tail -5
+DIR=forward WALL_JUMP_MS=1000000 node --import tsx/esm ./macos-proof.ts 2>&1 | tail -8
 
 echo "--- backward wall jump -5,000ms (waits for settle, ~70-75s) ---"
-DIR=backward WALL_JUMP_MS=-5000 node --import tsx/esm /tmp/macos-proof.ts 2>&1 | grep -E "VERDICT|bootstrap calls|poll gaps|outcome|settled" | tail -5
+DIR=backward WALL_JUMP_MS=-5000 node --import tsx/esm ./macos-proof.ts 2>&1 | tail -8
 
 if [ "$VARIANT" = "OLD" ]; then
+  rm -f macos-proof.ts
   git checkout -- src/daemon/launchd-runtime.ts 2>/dev/null || true
 fi
