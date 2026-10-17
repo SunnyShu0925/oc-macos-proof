@@ -1,0 +1,55 @@
+name: Measure Date.now seed call index
+on:
+  workflow_dispatch:
+jobs:
+  measure:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: fix/launchd-runtime-bootstrap-teardown-deadline-wall-clock-181
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Enable pnpm
+        run: corepack enable pnpm
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+      - name: Measure seed index
+        shell: bash
+        run: |
+          UID_NUM="$(id -u)"
+          cat > /tmp/probe.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>Label</key><string>ai.openclaw.probe</string>
+            <key>ProgramArguments</key><array><string>/bin/sleep</string><string>1</string></array>
+          </dict></plist>
+          PLIST
+          cat > ./measure.ts <<'SCRIPT'
+          const UID = process.env.UID_NUM!;
+          const realNow = Date.now.bind(Date);
+          const t0 = performance.now();
+          let n = 0;
+          Date.now = () => {
+            n += 1;
+            const el = Math.round(performance.now() - t0);
+            if (n <= 25) console.log(`Date.now call #${n} @ ${el}ms`);
+            return realNow();
+          };
+          const { bootstrapLaunchAgentOrThrow } = await import("./src/daemon/launchd-runtime.ts");
+          try {
+            await bootstrapLaunchAgentOrThrow({
+              domain: "user/" + UID,
+              serviceTarget: "user/" + UID + "/ai.openclaw.probe",
+              plistPath: "/tmp/probe.plist",
+              actionHint: "measure",
+              retryPendingTeardown: true,
+            });
+            console.log("resolved");
+          } catch (e:any) { console.log("threw:", e.message); }
+          SCRIPT
+          UID_NUM=$UID_NUM node --import tsx/esm ./measure.ts 2>&1 | grep -E "Date.now call|resolved|threw" | head -30
