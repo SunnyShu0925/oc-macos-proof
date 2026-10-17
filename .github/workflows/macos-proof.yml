@@ -51,4 +51,5 @@ jobs:
         shell: bash
         env:
           VARIANT: FIXED
+          RUN_DBG: "1"
         run: bash proofrepo/.github/workflows/run-proof.sh

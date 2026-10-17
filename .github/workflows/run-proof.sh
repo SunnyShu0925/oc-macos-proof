@@ -15,6 +15,40 @@ fi
 UID_NUM="$(id -u)"
 export UID_NUM VARIANT
 
+# --- DBG pass (FIXED, real transport, no wall jump): why does it throw? ---
+if [ "$VARIANT" = "FIXED" ] && [ -n "${RUN_DBG:-}" ]; then
+  python3 - <<'PY2'
+p="src/daemon/launchd-runtime.ts"
+s=open(p).read()
+needle="    const remainingMs = teardownDeadline - performance.now();"
+assert needle in s, "needle not found"
+inject="    const remainingMs = teardownDeadline - performance.now();\n" + \
+  "    console.error('[DBG] remainingMs=' + remainingMs + ' retryPending=' + params.retryPendingTeardown +\n" + \
+  "      ' pendingTeardown=' + isLaunchctlBootstrapPendingTeardown(boot) +\n" + \
+  "      ' term=' + boot.termination + ' code=' + boot.code +\n" + \
+  "      ' stderr=' + JSON.stringify(boot.stderr));"
+s=s.replace(needle, inject)
+open(p,"w").write(s)
+print("instrumented")
+PY2
+  cat > ./dbg.ts <<'SCRIPT'
+  const UID = process.env.UID_NUM!;
+  const { bootstrapLaunchAgentOrThrow } = await import("./src/daemon/launchd-runtime.ts");
+  try {
+    await bootstrapLaunchAgentOrThrow({
+      domain: "user/" + UID,
+      serviceTarget: "user/" + UID + "/ai.openclaw.probe",
+      plistPath: "/tmp/probe.plist",
+      actionHint: "dbg", retryPendingTeardown: true,
+    });
+    console.log("RESULT resolved");
+  } catch (e:any) { console.log("RESULT threw:", e.message); }
+  SCRIPT
+  UID_NUM=$UID_NUM node --import tsx/esm ./dbg.ts 2>&1 | grep -E "\[DBG\]|RESULT" | head -12
+  rm -f dbg.ts
+  git checkout -- src/daemon/launchd-runtime.ts
+fi
+
 cat > macos-proof.ts <<'SCRIPT'
 const VARIANT = process.env.VARIANT || "FIXED";
 const UID = process.env.UID_NUM!;
