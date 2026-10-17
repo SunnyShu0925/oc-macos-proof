@@ -35,13 +35,20 @@ jobs:
           </dict></plist>
           PLIST
           launchctl bootstrap "user/$UID_NUM" /tmp/probe.plist 2>&1 || true; echo "REAL_EIO_EXIT=$?"
+      - name: Checkout proof scripts
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: main
+          path: /tmp/proofrepo
+          fetch-depth: 1
       - name: Run proof OLD variant (Date.now deadline)
         shell: bash
         env:
           VARIANT: OLD
-        run: bash .github/workflows/run-proof.sh
+        run: bash /tmp/proofrepo/.github/workflows/run-proof.sh
       - name: Run proof FIXED variant (performance.now deadline)
         shell: bash
         env:
           VARIANT: FIXED
-        run: bash .github/workflows/run-proof.sh
+        run: bash /tmp/proofrepo/.github/workflows/run-proof.sh
