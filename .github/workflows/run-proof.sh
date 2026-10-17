@@ -65,10 +65,10 @@ if (DIR === "forward") {
 SCRIPT
 
 echo "--- forward wall jump +1,000,000ms ---"
-DIR=forward WALL_JUMP_MS=1000000 node --import tsx/esm ./macos-proof.ts 2>&1 | tail -6
+WALL_DIR=forward WALL_JUMP_MS=1000000 node --import tsx/esm ./macos-proof.ts 2>&1 | tail -6
 
 echo "--- backward wall jump -5,000ms (waits for settle, ~340s) ---"
-DIR=backward WALL_JUMP_MS=-5000 node --import tsx/esm ./macos-proof.ts 2>&1 | tail -6
+WALL_DIR=backward WALL_JUMP_MS=-5000 node --import tsx/esm ./macos-proof.ts 2>&1 | tail -6
 
 if [ "$VARIANT" = "OLD" ]; then
   rm -f macos-proof.ts
