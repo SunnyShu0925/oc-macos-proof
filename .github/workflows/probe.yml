@@ -1,56 +1,35 @@
-name: macOS Probe 2 (pending-teardown EIO + clock)
+name: macOS Probe 3 (user-domain EIO + BSD clock)
 on:
   workflow_dispatch:
 jobs:
   probe:
     runs-on: macos-14
+    shell: bash
     steps:
       - uses: actions/checkout@v4
-      - name: Probe pending-teardown EIO + clock
-        shell: bash
+      - name: Probe user-domain EIO + clock
         run: |
           set +e
           UID_NUM=$(id -u)
           echo "UID=$UID_NUM"
-          # A job whose process ignores SIGTERM so bootout leaves it draining.
-          cat > /tmp/ignoreterm.sh <<'SCRIPT'
-          #!/bin/bash
-          trap '' TERM
-          while true; do sleep 1; done
-          SCRIPT
-          chmod +x /tmp/ignoreterm.sh
-          cat > /tmp/drain.plist <<PLIST
+          cat > /tmp/probe.plist <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>Label</key><string>ai.openclaw.drain</string>
-            <key>ProgramArguments</key><array><string>/tmp/ignoreterm.sh</string></array>
-            <key>ProcessType</key><string>Interactive</string>
-          </dict>
-          </plist>
+          <plist version="1.0"><dict>
+            <key>Label</key><string>ai.openclaw.probe</string>
+            <key>ProgramArguments</key><array><string>/bin/sleep</string><string>1</string></array>
+          </dict></plist>
           PLIST
-
-          echo "=== 1. bootstrap gui job ==="
-          launchctl bootstrap "gui/$UID_NUM" /tmp/drain.plist 2>&1; echo "bootstrap exit=$?"
-          launchctl print "gui/$UID_NUM/ai.openclaw.drain" 2>&1 | head -3
-
-          echo "=== 2. bootout (job ignores TERM -> stays draining) ==="
-          launchctl bootout "gui/$UID_NUM/ai.openclaw.drain" 2>&1; echo "bootout exit=$?"
-          sleep 1
-          echo "--- is it still draining? print state ---"
-          launchctl print "gui/$UID_NUM/ai.openclaw.drain" 2>&1 | grep -iE "state|pid|last exit" | head -5
-
-          echo "=== 3. re-bootstrap same label during drain -> expect EIO ==="
-          launchctl bootstrap "gui/$UID_NUM" /tmp/drain.plist 2>&1; echo "re-bootstrap exit=$?"
-
-          echo "=== 4. clock change via sudo date ==="
-          sudo -n date -u -s "2026-10-17 12:00:00" 2>&1; echo "date exit=$?"
-          date
+          echo "=== user domain EIO stability (3x) ==="
+          for i in 1 2 3; do launchctl bootstrap "user/$UID_NUM" /tmp/probe.plist 2>&1; echo "  attempt $i exit=$?"; done
+          echo "=== gui domain EIO for a missing plist? ==="
+          launchctl bootstrap "gui/$UID_NUM" /tmp/nonexistent.plist 2>&1; echo "  missing exit=$?"
+          echo "=== clock: sudo date relative -v (need networktime off) ==="
           sudo -n systemsetup -setusingnetworktime off 2>&1 | tail -1
-          sudo -n date -u -s "2026-10-17 12:05:00" 2>&1; echo "date2 exit=$?"
-          date
-
-          echo "=== cleanup ==="
-          launchctl bootout "gui/$UID_NUM/ai.openclaw.drain" 2>&1
+          echo "before: $(date)"
+          sudo -n date -v+300S 2>&1; echo "  date-forward exit=$?"
+          echo "after forward: $(date)"
+          sudo -n date -v-300S 2>&1; echo "  date-back exit=$?"
+          echo "after back: $(date)"
+          sudo -n systemsetup -setusingnetworktime on 2>&1 | tail -1
           echo "DONE"
