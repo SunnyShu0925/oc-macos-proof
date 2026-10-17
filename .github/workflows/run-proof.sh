@@ -33,16 +33,10 @@ Date.now = () => {
   return realNow() + (calls > 1 ? WALL_JUMP_MS : 0);
 };
 
+// NOTE: we deliberately do NOT replace execLaunchctl. The transport stays the
+// real `launchctl` child process. We only observe the *settle behaviour* of the
+// production retry loop under a wall-clock jump.
 const { bootstrapLaunchAgentOrThrow } = await import("./src/daemon/launchd-runtime.ts");
-const bootTimestamps: number[] = [];
-const execMod = await import("./src/daemon/launchd-exec.ts");
-const origExec = execMod.execLaunchctl.bind(execMod);
-// Timestamp real bootstrap spawns only; the launchctl child is REAL.
-(execMod as any).execLaunchctl = async (args: string[], budget?: any) => {
-  if (args[0] === "bootstrap") bootTimestamps.push(performance.now());
-  return origExec(args, budget);
-};
-
 const abort = new AbortController();
 let outcome = "pending";
 const start = performance.now();
@@ -64,7 +58,6 @@ if (DIR === "forward") {
   // transport. Observe 2.5s.
   await new Promise((r) => setTimeout(r, 2500));
   console.log(`VERDICT[${VARIANT}][forward +1e6ms] outcome@2.5s = ${outcome}`);
-  console.log(`  real bootstrap calls in 2.5s = ${bootTimestamps.length}`);
   abort.abort();
 } else {
   // Backward jump: wait for the loop to settle at the monotonic deadline (~70s).
