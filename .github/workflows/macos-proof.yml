@@ -1,0 +1,47 @@
+name: macOS Real-Transport Proof (PR #175204)
+on:
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: "PR branch on SunnyShu0925/openclaw"
+        required: false
+        default: "fix/launchd-runtime-bootstrap-teardown-deadline-wall-clock-181"
+jobs:
+  macos-proof:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ github.event.inputs.pr_branch }}
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Enable pnpm
+        run: corepack enable pnpm
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+      - name: Confirm real EIO from launchctl
+        shell: bash
+        run: |
+          UID_NUM=$(id -u)
+          cat > /tmp/probe.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>Label</key><string>ai.openclaw.probe</string>
+            <key>ProgramArguments</key><array><string>/bin/sleep</string><string>1</string></array>
+          </dict></plist>
+          PLIST
+          launchctl bootstrap "user/$UID_NUM" /tmp/probe.plist 2>&1; echo "REAL_EIO_EXIT=$?"
+      - name: Run proof OLD variant (Date.now deadline)
+        shell: bash
+        env:
+          VARIANT: OLD
+        run: bash .github/workflows/run-proof.sh
+      - name: Run proof FIXED variant (performance.now deadline)
+        shell: bash
+        env:
+          VARIANT: FIXED
+        run: bash .github/workflows/run-proof.sh
