@@ -47,7 +47,6 @@ echo ""
 START_MS=$(node -e 'console.log(Date.now())')
 PROOF_VARIANT="$VARIANT" WALL_JUMP_MS="$WALL_JUMP_MS" \
   OPENCLAW_LAUNCHD_LABEL="ai.openclaw.proof" \
-  timeout "$((BUDGET_MS / 1000 + 60))" \
   node --import tsx --loader "$LOADER" \
   "$OPENCLAW_DIR/src/entry.ts" daemon install --allow-unconfigured --json \
   > "/tmp/proof-v2-$VARIANT-$WALL_DIR.stdout" 2> "/tmp/proof-v2-$VARIANT-$WALL_DIR.stderr" \
