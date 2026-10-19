@@ -39,7 +39,7 @@ jobs:
 
       - name: Run shipped-CLI proof OLD (forward +1e6ms)
         working-directory: openclaw
-        run: bash proofrepo/.github/workflows/run-proof-v2.sh
+        run: bash $GITHUB_WORKSPACE/proofrepo/.github/workflows/run-proof-v2.sh
         env:
           VARIANT: OLD
           WALL_DIR: forward
@@ -48,7 +48,7 @@ jobs:
 
       - name: Run shipped-CLI proof FIXED (forward +1e6ms)
         working-directory: openclaw
-        run: bash proofrepo/.github/workflows/run-proof-v2.sh
+        run: bash $GITHUB_WORKSPACE/proofrepo/.github/workflows/run-proof-v2.sh
         env:
           VARIANT: FIXED
           WALL_DIR: forward
