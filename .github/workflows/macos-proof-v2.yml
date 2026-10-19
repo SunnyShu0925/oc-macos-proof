@@ -1,0 +1,79 @@
+name: macOS Shipped-CLI Proof v2 (PR #175204)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: PR branch on SunnyShu0925/openclaw to test
+        required: true
+        default: fix/launchd-runtime-bootstrap-teardown-deadline-wall-clock-181
+
+jobs:
+  proof:
+    runs-on: macos-14
+    steps:
+      - name: Checkout openclaw PR branch (fork)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ github.event.inputs.pr_branch }}
+          path: openclaw
+
+      - name: Checkout proof scripts
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: main
+          path: proofrepo
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install deps (pnpm)
+        working-directory: openclaw
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Run shipped-CLI proof OLD (forward +1e6ms)
+        working-directory: openclaw
+        run: bash proofrepo/.github/workflows/run-proof-v2.sh
+        env:
+          VARIANT: OLD
+          WALL_DIR: forward
+          OPENCLAW_DIR: ${{ github.workspace }}/openclaw
+          LOADER_PATH: ${{ github.workspace }}/proofrepo/proof-loader.mjs
+
+      - name: Run shipped-CLI proof FIXED (forward +1e6ms)
+        working-directory: openclaw
+        run: bash proofrepo/.github/workflows/run-proof-v2.sh
+        env:
+          VARIANT: FIXED
+          WALL_DIR: forward
+          OPENCLAW_DIR: ${{ github.workspace }}/openclaw
+          LOADER_PATH: ${{ github.workspace }}/proofrepo/proof-loader.mjs
+
+      - name: Collect verdict
+        if: always()
+        run: |
+          echo "=== VERDICT SUMMARY ==="
+          grep -h "VERDICT\[" /tmp/proof-v2-*.stderr /tmp/proof-v2-*.stdout 2>/dev/null || echo "no verdict lines found"
+          echo ""
+          echo "=== OLD forward stdout ==="
+          cat /tmp/proof-v2-OLD-forward.stdout 2>/dev/null | tail -30 || true
+          echo "=== OLD forward stderr ==="
+          cat /tmp/proof-v2-OLD-forward.stderr 2>/dev/null | tail -30 || true
+          echo "=== FIXED forward stdout ==="
+          cat /tmp/proof-v2-FIXED-forward.stdout 2>/dev/null | tail -30 || true
+          echo "=== FIXED forward stderr ==="
+          cat /tmp/proof-v2-FIXED-forward.stderr 2>/dev/null | tail -30 || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proof-v2-logs
+          path: |
+            /tmp/proof-v2-*.stdout
+            /tmp/proof-v2-*.stderr
