@@ -3,20 +3,14 @@
 // exercises bootstrapLaunchAgentOrThrow's pending-teardown retry with a
 // controlled clock.
 //
-// 1. src/daemon/launchd-runtime.ts
-//    VARIANT=OLD: replaces performance.now() with Date.now()+WALL_JUMP_MS so
-//    the wall-clock deadline seed and remaining-budget read observe a wall-
-//    clock step (NTP/manual-clock divergence). This is the buggy Date.now()
-//    arithmetic. VARIANT=FIXED: untouched (monotonic, immune to skew).
-//
-// 2. src/daemon/launchd-exec.ts
-//    Intercepts execLaunchctl so the `bootstrap` command returns a real EIO
-//    ("Bootstrap failed: 5: Input/output error") that
+// 1. src/daemon/launchd-exec.ts
+//    Forces execLaunchctl("bootstrap",...) to return a real EIO that
 //    isLaunchctlBootstrapPendingTeardown classifies as pending teardown.
-//    Other launchctl commands (bootout/enable/print-disabled) run through the
-//    real launchctl binary on the macOS runner. This reproduces the real
-//    pending-teardown scenario (a bootout racing the next bootstrap) without
-//    needing to time a real bootout teardown.
+//    Other launchctl commands run through the real launchctl binary.
+//
+// 2. src/daemon/launchd-runtime.ts
+//    VARIANT=OLD: seed -> Date.now(), read -> Date.now() + WALL_JUMP_MS
+//    (wall clock stepped between seed and read). VARIANT=FIXED: untouched.
 
 const TARGET_RUNTIME = "/src/daemon/launchd-runtime.ts";
 const TARGET_EXEC = "/src/daemon/launchd-exec.ts";
@@ -36,24 +30,22 @@ export async function load(url, context, nextLoad) {
       : Buffer.from(result.source).toString("utf8");
 
   if (url.endsWith(TARGET_EXEC)) {
-    // Inject a wrapper around execLaunchctl that forces bootstrap to return EIO.
-    // The real launchctl binary still runs for every other command.
-    const patched =
-      source.replace(
-        "export async function execLaunchctl(",
-        `// PROOF: force bootstrap EIO to simulate pending teardown (real launchctl runs for other commands)
-const __PROOF_FORCE_EIO = process.env.PROOF_FORCE_EIO === "1";
-export async function execLaunchctl(__proofArgs, __proofBudget) {
-  if (__PROOF_FORCE_EIO && __proofArgs[0] === "bootstrap") {
+    // Rename the real export and prepend a wrapper that forces bootstrap EIO.
+    const realExport = "export async function execLaunchctl(";
+    if (!source.includes(realExport)) return result;
+    const patched = source.replace(
+      realExport,
+      `const __PROOF_FORCE_EIO = process.env.PROOF_FORCE_EIO === "1";
+async function __realExecLaunchctl(`,
+    ) + `
+// PROOF wrapper: force bootstrap EIO to simulate pending teardown.
+export async function execLaunchctl(args, budget) {
+  if (__PROOF_FORCE_EIO && args[0] === "bootstrap") {
     return { code: 1, termination: "exit", stdout: "", stderr: "Bootstrap failed: 5: Input/output error" };
   }
-  return __realExecLaunchctl(__proofArgs, __proofBudget);
+  return __realExecLaunchctl(args, budget);
 }
-const __realExecLaunchctl = async function execLaunchctl(`,
-      );
-    if (patched === source) {
-      return result;
-    }
+`;
     return { format: "module", source: patched };
   }
 
@@ -66,14 +58,14 @@ const __realExecLaunchctl = async function execLaunchctl(`,
     const patched = source
       .replace(
         /const teardownDeadline = performance\.now\(\) \+ LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_TIMEOUT_MS;/,
-        "const teardownDeadline = Date.now() + WALL_JUMP_MS_VALUE + LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_TIMEOUT_MS;",
+        "const teardownDeadline = Date.now() + LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_TIMEOUT_MS;",
       )
       .replace(
         /const remainingMs = teardownDeadline - performance\.now\(\);/,
         "const remainingMs = teardownDeadline - (Date.now() + WALL_JUMP_MS_VALUE);",
       );
     if (patched === source) {
-      console.error(`[proof-loader] WARNING: no performance.now() sites patched in ${url}`);
+      console.error(`[proof-loader] WARNING: launchd-runtime.ts sites not patched`);
       return result;
     }
     const injected =
