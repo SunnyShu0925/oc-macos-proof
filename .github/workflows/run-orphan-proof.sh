@@ -87,14 +87,14 @@ sleep 2
 ROOT_PID="$(cat /tmp/orphan-root.pid)"
 echo ">>> spawned root pid=$ROOT_PID; waiting for launchd adoption (PPID=1)..." | tee -a "$LOG"
 for i in $(seq 1 20); do
-  PPID="$(ps -o ppid= -p "$ROOT_PID" 2>/dev/null | tr -d ' ' || true)"
-  if [ "$PPID" = "1" ]; then break; fi
+  ROOT_PPID="$(ps -o ppid= -p "$ROOT_PID" 2>/dev/null | tr -d ' ' || true)"
+  if [ "$ROOT_PPID" = "1" ]; then break; fi
   sleep 1
 done
-PPID="$(ps -o ppid= -p "$ROOT_PID" 2>/dev/null | tr -d ' ' || true)"
-echo ">>> root pid=$ROOT_PID ppid=$PPID (expected 1 = launchd-adopted)" | tee -a "$LOG"
-if [ "$PPID" != "1" ]; then
-  echo "VERDICT[$VARIANT] FAILED: root was not adopted by launchd (ppid=$PPID)" | tee -a "$LOG"
+ROOT_PPID="$(ps -o ppid= -p "$ROOT_PID" 2>/dev/null | tr -d ' ' || true)"
+echo ">>> root pid=$ROOT_PID ppid=$ROOT_PPID (expected 1 = launchd-adopted)" | tee -a "$LOG"
+if [ "$ROOT_PPID" != "1" ]; then
+  echo "VERDICT[$VARIANT] FAILED: root was not adopted by launchd (ppid=$ROOT_PPID)" | tee -a "$LOG"
   exit 1
 fi
 
