@@ -1,0 +1,60 @@
+name: macOS Orphaned-Process Wall-Clock Proof (PR #181335)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: PR branch on SunnyShu0925/openclaw to test
+        required: true
+        default: fix/orphaned-process-reap-grace-deadline-monotonic-213
+
+jobs:
+  proof:
+    runs-on: macos-14
+    steps:
+      - name: Checkout openclaw PR branch (fork)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ github.event.inputs.pr_branch }}
+          path: openclaw
+
+      - name: Checkout proof scripts
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: main
+          path: proofrepo
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install deps (pnpm)
+        working-directory: openclaw
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Run orphaned-process proof FIXED
+        working-directory: openclaw
+        run: bash $GITHUB_WORKSPACE/proofrepo/.github/workflows/run-orphan-proof.sh
+        env:
+          VARIANT: FIXED
+          WALL_JUMP_MS: -60000
+          OPENCLAW_DIR: ${{ github.workspace }}/openclaw
+
+      - name: Run orphaned-process proof OLD
+        working-directory: openclaw
+        run: bash $GITHUB_WORKSPACE/proofrepo/.github/workflows/run-orphan-proof.sh
+        env:
+          VARIANT: OLD
+          WALL_JUMP_MS: -60000
+          OPENCLAW_DIR: ${{ github.workspace }}/openclaw
+
+      - name: Collect verdict
+        if: always()
+        run: |
+          echo "=== VERDICT SUMMARY ==="
+          grep -h "VERDICT\|CASE:\|monotonic\|PROOF" /tmp/orphan-*.log 2>/dev/null || echo "no verdict lines"
