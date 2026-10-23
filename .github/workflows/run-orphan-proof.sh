@@ -29,7 +29,7 @@ import sys,re
 src=open(sys.argv[1]).read()
 src=src.replace("const deadline = performance.now() + 5_000;","const deadline = Date.now() + 5_000;")
 src=src.replace("while (alive().length > 0 && performance.now() < deadline) {",
-                "while (alive().length > 0 && Date.now() < deadline) {")
+                "while (alive().length > 0 && (Date.now() + Number(process.env.WALL_JUMP_MS||0)) < deadline) {")
 src=src.replace("await sleepWithAbort(Math.min(25, deadline - performance.now()));",
                 "await sleepWithAbort(Math.min(25, deadline - (Date.now() + Number(process.env.WALL_JUMP_MS||0))));")
 open("src/process/orphaned-process.ts","w").write(src)
