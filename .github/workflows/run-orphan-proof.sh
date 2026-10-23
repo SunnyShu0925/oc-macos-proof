@@ -19,7 +19,10 @@ LOG="/tmp/orphan-${VARIANT}.log"
 #   <STATE_DIR>/tools/llama.cpp/<release>/<platform>-<arch>/<executable>
 STATE_DIR="/tmp/llama-state"
 LLAMA_RELEASE="b10809"
-MANAGED_COMMAND="$STATE_DIR/tools/llama.cpp/$LLAMA_RELEASE/darwin-x64/llama-server"
+# Resolve the real platform/arch so findManagedLlamaServerAsset matches exactly.
+NODE_PLATFORM="$(node -e 'process.stdout.write(process.platform)')"
+NODE_ARCH="$(node -e 'process.stdout.write(process.arch)')"
+MANAGED_COMMAND="$STATE_DIR/tools/llama.cpp/$LLAMA_RELEASE/$NODE_PLATFORM-$NODE_ARCH/llama-server"
 PORT=19321
 
 cd "$OPENCLAW_DIR"
@@ -91,7 +94,7 @@ cat > /tmp/spawn-orphan.sh <<SH
 # Same cwd as the driver process so recoverManagedLlamaServer's implicit
 # cwd (process.cwd()) matches the orphan root's captured cwd.
 cd "$OPENCLAW_DIR"
-$MANAGED_COMMAND --port $PORT --models-preset default --host 127.0.0.1 &
+$MANAGED_COMMAND --port $PORT --models-preset /tmp/models.ini --host 127.0.0.1 &
 echo \$! > /tmp/orphan-root.pid
 exit 0
 SH
@@ -123,14 +126,21 @@ fi
 cat > "$OPENCLAW_DIR/orphan-drive.mts" <<'TS'
 import { execSync } from "node:child_process";
 import { recoverManagedLlamaServer } from "./extensions/llama-cpp/src/managed-server-orphans.ts";
+import { findManagedLlamaServerAsset, resolveManagedLlamaServerPaths } from "./extensions/llama-cpp/src/llama-server-assets.ts";
 
 const VARIANT = process.env.VARIANT || "FIXED";
 const WALL_JUMP_MS = Number(process.env.WALL_JUMP_MS || 0);
 const ROOT_PID = Number(execSync("cat /tmp/orphan-root.pid").toString().trim());
 
 const port = 19321;
-const command = "/tmp/llama-state/tools/llama.cpp/b10809/darwin-x64/llama-server";
-const args = ["--port", String(port), "--models-preset", "default", "--host", "127.0.0.1"];
+const command = process.env.MANAGED_COMMAND || "/tmp/llama-state/tools/llama.cpp/b10809/darwin-x64/llama-server";
+const args = ["--port", String(port), "--models-preset", "/tmp/models.ini", "--host", "127.0.0.1"];
+
+// DIAGNOSTIC: confirm the managed asset resolves against the real platform/arch.
+console.log(`[DIAG] platform=${process.platform} arch=${process.arch} state_dir=${process.env.OPENCLAW_STATE_DIR}`);
+console.log(`[DIAG] findManagedLlamaServerAsset(command) =>`, findManagedLlamaServerAsset(command)?.name ?? "NOT FOUND");
+console.log(`[DIAG] resolveManagedLlamaServerPaths().command =`, resolveManagedLlamaServerPaths().command);
+console.log(`[DIAG] command arg =`, command);
 
 // Sanity: confirm the tree is captured as a live orphaned root before recovery.
 const before = execSync(`ps -o pid=,ppid=,comm= -p ${ROOT_PID} 2>/dev/null || true`).toString().trim();
@@ -167,7 +177,7 @@ if (VARIANT === "FIXED") {
 TS
 
 # macOS has no `timeout`; run with a background deadline guard instead.
-OPENCLAW_STATE_DIR="$STATE_DIR" WALL_JUMP_MS="$WALL_JUMP_MS" VARIANT="$VARIANT" \
+OPENCLAW_STATE_DIR="$STATE_DIR" WALL_JUMP_MS="$WALL_JUMP_MS" VARIANT="$VARIANT" MANAGED_COMMAND="$MANAGED_COMMAND" \
   node --import tsx "$OPENCLAW_DIR/orphan-drive.mts" >> "$LOG" 2>&1 &
 DRIVE_PID=$!
 ( sleep 150; kill -9 "$DRIVE_PID" 2>/dev/null || true ) &
