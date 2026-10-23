@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# PR #181335 macOS real-behavior proof: reapOrphanedProcesses under a wall-clock
-# rollback. Real orphaned (launchd-adopted, PPID=1) managed llama-server tree with
-# a TERM-resistant descendant; real native process inspection (@openclaw/proc-safe
+# PR #181335 macOS real-behavior proof: managed-server recovery under a wall-clock
+# rollback, driven through the SHIPPED entry point `recoverManagedLlamaServer`
+# (extensions/llama-cpp/src/managed-server-orphans.ts) which resolves the real
+# managed llama-server asset and calls reapOrphanedProcesses.
+#
+# Real orphaned (launchd-adopted, PPID=1) managed llama-server tree with a
+# TERM-resistant descendant; real native process inspection (@openclaw/proc-safe
 # darwin binding) and real process.kill. The wall-clock step is injected at the
 # OLD variant's remaining-budget read only (CI pins the system clock via NTP); the
 # monotonic clock (performance.now / setTimeout) and the transport stay REAL.
@@ -11,10 +15,17 @@ VARIANT="${VARIANT:-FIXED}"
 WALL_JUMP_MS="${WALL_JUMP_MS:--60000}"
 OPENCLAW_DIR="${OPENCLAW_DIR:-$(pwd)}"
 LOG="/tmp/orphan-${VARIANT}.log"
+# Real managed llama-server installation layout (matches resolveManagedLlamaServerPaths):
+#   <STATE_DIR>/tools/llama.cpp/<release>/<platform>-<arch>/<executable>
+STATE_DIR="/tmp/llama-state"
+LLAMA_RELEASE="b10809"
+MANAGED_COMMAND="$STATE_DIR/tools/llama.cpp/$LLAMA_RELEASE/darwin-x64/llama-server"
+PORT=19321
 
 cd "$OPENCLAW_DIR"
 echo "===== CASE: $VARIANT (wall jump ${WALL_JUMP_MS}ms) =====" | tee "$LOG"
 echo "head=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" | tee -a "$LOG"
+echo "managed_command=$MANAGED_COMMAND" | tee -a "$LOG"
 
 # ---------------------------------------------------------------------------
 # OLD variant: revert orphaned-process.ts to the Date.now() deadline and inject
@@ -25,7 +36,7 @@ echo "head=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" | tee -a "
 if [ "$VARIANT" = "OLD" ]; then
   cp src/process/orphaned-process.ts "$LOG.postfix.bak"
   python3 - "$LOG.postfix.bak" <<'PY'
-import sys,re
+import sys
 src=open(sys.argv[1]).read()
 src=src.replace("const deadline = performance.now() + 5_000;","const deadline = Date.now() + 5_000;")
 src=src.replace("while (alive().length > 0 && performance.now() < deadline) {",
@@ -39,11 +50,12 @@ PY
 fi
 
 # ---------------------------------------------------------------------------
-# Build a real TERM-resistant managed llama-server simulator (C) at a pinned path.
-# It ignores SIGTERM (catches, does not exit) and forks a TERM-resistant child.
+# Install a real TERM-resistant managed llama-server simulator (C) at the pinned
+# managed path. It ignores SIGTERM (catches, does not exit) and forks a
+# TERM-resistant child. findManagedLlamaServerAsset matches this exact path.
 # ---------------------------------------------------------------------------
-mkdir -p /tmp/llama-bin /tmp/llama-state
-cat > /tmp/llama-bin/llama-server.c <<'C'
+mkdir -p "$(dirname "$MANAGED_COMMAND")"
+cat > /tmp/llama-server.c <<'C'
 #include <signal.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -66,18 +78,20 @@ int main(int argc, char **argv) {
   return 0;
 }
 C
-clang -O2 -o /tmp/llama-bin/llama-server /tmp/llama-bin/llama-server.c
-echo ">>> built /tmp/llama-bin/llama-server" | tee -a "$LOG"
+clang -O2 -o "$MANAGED_COMMAND" /tmp/llama-server.c
+echo ">>> installed managed llama-server at $MANAGED_COMMAND" | tee -a "$LOG"
 
 # ---------------------------------------------------------------------------
 # Construct a launchd-adopted orphan: a spawner starts the root, then exits, so
 # the root is reparented to PID 1 (PPID=1) -> qualifies as an orphaned managed
-# llama-server root for reapOrphanedProcesses.
+# llama-server root for recoverManagedLlamaServer.
 # ---------------------------------------------------------------------------
-PORT=19321
 cat > /tmp/spawn-orphan.sh <<SH
 #!/bin/bash
-/tmp/llama-bin/llama-server --port $PORT --models-preset default --host 127.0.0.1 &
+# Same cwd as the driver process so recoverManagedLlamaServer's implicit
+# cwd (process.cwd()) matches the orphan root's captured cwd.
+cd "$OPENCLAW_DIR"
+$MANAGED_COMMAND --port $PORT --models-preset default --host 127.0.0.1 &
 echo \$! > /tmp/orphan-root.pid
 exit 0
 SH
@@ -101,36 +115,29 @@ if [ "$ROOT_PPID" != "1" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Drive the shipped reapOrphanedProcesses owner against the real orphan tree.
-# The script is written INSIDE $OPENCLAW_DIR so its relative ./src import resolves.
+# Drive the SHIPPED recoverManagedLlamaServer entry point against the real orphan
+# tree. It resolves the managed asset, builds the matchesArguments filter, and
+# calls reapOrphanedProcesses. The script is written INSIDE $OPENCLAW_DIR so its
+# relative ./extensions import + openclaw/plugin-sdk/* tsconfig paths resolve.
 # ---------------------------------------------------------------------------
 cat > "$OPENCLAW_DIR/orphan-drive.mts" <<'TS'
 import { execSync } from "node:child_process";
+import { recoverManagedLlamaServer } from "./extensions/llama-cpp/src/managed-server-orphans.ts";
 
 const VARIANT = process.env.VARIANT || "FIXED";
 const WALL_JUMP_MS = Number(process.env.WALL_JUMP_MS || 0);
 const ROOT_PID = Number(execSync("cat /tmp/orphan-root.pid").toString().trim());
 
-const { reapOrphanedProcesses } = await import("./src/process/orphaned-process.ts");
-
 const port = 19321;
-const command = "/tmp/llama-bin/llama-server";
-const matchesArguments = (argv: readonly string[]) => {
-  const get = (name: string) => {
-    for (let i = 0; i < argv.length - 1; i++) if (argv[i] === name) return argv[i + 1];
-    return undefined;
-  };
-  return get("--port") === String(port)
-    && get("--models-preset") === "default"
-    && get("--host") === "127.0.0.1";
-};
+const command = "/tmp/llama-state/tools/llama.cpp/b10809/darwin-x64/llama-server";
+const args = ["--port", String(port), "--models-preset", "default", "--host", "127.0.0.1"];
 
-// Sanity: confirm the tree is captured as a live orphaned root before reaping.
+// Sanity: confirm the tree is captured as a live orphaned root before recovery.
 const before = execSync(`ps -o pid=,ppid=,comm= -p ${ROOT_PID} 2>/dev/null || true`).toString().trim();
-console.log(`[${VARIANT}] before reap: ${before}`);
+console.log(`[${VARIANT}] before recovery: ${before}`);
 
 const t0 = performance.now();
-const reaped = await reapOrphanedProcesses({ command, matchesArguments });
+await recoverManagedLlamaServer({ command, port, args });
 const t1 = performance.now();
 const elapsedMonotonic = Math.round(t1 - t0);
 
@@ -138,8 +145,8 @@ const elapsedMonotonic = Math.round(t1 - t0);
 let rootAlive = false;
 try { rootAlive = (execSync(`ps -o pid= -p ${ROOT_PID} 2>/dev/null || true`).toString().trim() !== ""); } catch { rootAlive = false; }
 
-console.log(`[${VARIANT}] reapOrphanedProcesses returned reaped=[${reaped.join(",")}] elapsed_monotonic=${elapsedMonotonic}ms root_alive_after=${rootAlive}`);
-console.log(`VERDICT[${VARIANT}] wall_jump=${WALL_JUMP_MS}ms elapsed_monotonic=${elapsedMonotonic}ms reaped=[${reaped.join(",")}] root_alive_after=${rootAlive}`);
+console.log(`[${VARIANT}] recoverManagedLlamaServer returned elapsed_monotonic=${elapsedMonotonic}ms root_alive_after=${rootAlive}`);
+console.log(`VERDICT[${VARIANT}] wall_jump=${WALL_JUMP_MS}ms elapsed_monotonic=${elapsedMonotonic}ms reaped_root=${ROOT_PID} root_alive_after=${rootAlive}`);
 
 // Distinguish bounded escalation (5s, FIXED) from delayed (5s + |rollback|, OLD).
 if (VARIANT === "FIXED") {
@@ -159,9 +166,8 @@ if (VARIANT === "FIXED") {
 }
 TS
 
-# node --import tsx "$OPENCLAW_DIR/orphan-drive.mts" >> "$LOG" 2>&1 || true
 # macOS has no `timeout`; run with a background deadline guard instead.
-WALL_JUMP_MS="$WALL_JUMP_MS" VARIANT="$VARIANT" \
+OPENCLAW_STATE_DIR="$STATE_DIR" WALL_JUMP_MS="$WALL_JUMP_MS" VARIANT="$VARIANT" \
   node --import tsx "$OPENCLAW_DIR/orphan-drive.mts" >> "$LOG" 2>&1 &
 DRIVE_PID=$!
 ( sleep 150; kill -9 "$DRIVE_PID" 2>/dev/null || true ) &
@@ -173,7 +179,7 @@ rm -f "$OPENCLAW_DIR/orphan-drive.mts"
 # ---------------------------------------------------------------------------
 # Cleanup: ensure no leaked llama-server keeps holding state (SIGKILL it).
 # ---------------------------------------------------------------------------
-pkill -9 -f "/tmp/llama-bin/llama-server" 2>/dev/null || true
+pkill -9 -f "llama-server" 2>/dev/null || true
 if [ "$VARIANT" = "OLD" ]; then
   if [ -f "$LOG.postfix.bak" ]; then
     cp "$LOG.postfix.bak" src/process/orphaned-process.ts
