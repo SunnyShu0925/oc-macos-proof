@@ -15,13 +15,20 @@ const LOADER = process.env.PROOF_LOADER;
 const VARIANT = process.env.PROOF_VARIANT || "FIXED";
 const SKEW_MS = Number(process.env.PROOF_SKEW_MS || 2000);
 const HEARTBEAT_INTERVAL_MS = Number(process.env.PROOF_INTERVAL_MS || 250);
-const OBSERVE_MS = Number(process.env.PROOF_OBSERVE_MS || 4000);
+const OBSERVE_MS = Number(process.env.PROOF_OBSERVE_MS || 6000);
 
 const FRAME = {
   id: "invoke-bug189",
   nodeId: "node-1",
-  command: "file.fetch",
-  paramsJSON: JSON.stringify({ path: "/etc/hostname" }),
+  // duplex:true command -> the handler blocks waiting for input on the duplex
+  // channel, so the invocation stays alive and the progress writer keeps
+  // emitting heartbeats for the whole observe window.
+  command: "file.create",
+  paramsJSON: JSON.stringify({
+    sizeBytes: 1,
+    expectedSha256: "0".repeat(64),
+    path: "/tmp/bug189-proof.bin",
+  }),
   timeoutMs: 60000,
 };
 

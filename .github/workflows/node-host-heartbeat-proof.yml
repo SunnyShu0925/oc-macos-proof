@@ -51,7 +51,7 @@ jobs:
         working-directory: openclaw
         run: node --import tsx $GITHUB_WORKSPACE/proofrepo/parent-driver.mts
         env:
-          VARIANT: OLD
+          PROOF_VARIANT: OLD
           WORKER_ENTRY: ${{ github.workspace }}/proofrepo/worker-entry.mts
           PROOF_LOADER: ${{ github.workspace }}/proofrepo/worker-proof-loader.mjs
           OPENCLAW_DIR: ${{ github.workspace }}/openclaw
@@ -62,7 +62,7 @@ jobs:
         working-directory: openclaw
         run: node --import tsx $GITHUB_WORKSPACE/proofrepo/parent-driver.mts
         env:
-          VARIANT: FIXED
+          PROOF_VARIANT: FIXED
           WORKER_ENTRY: ${{ github.workspace }}/proofrepo/worker-entry.mts
           PROOF_LOADER: ${{ github.workspace }}/proofrepo/worker-proof-loader.mjs
           OPENCLAW_DIR: ${{ github.workspace }}/openclaw
