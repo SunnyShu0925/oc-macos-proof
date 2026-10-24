@@ -10,7 +10,7 @@ on:
 
 jobs:
   proof:
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 40
     steps:
       - name: Checkout openclaw PR branch (fork)
@@ -65,7 +65,7 @@ jobs:
         working-directory: openclaw
         continue-on-error: true
         run: |
-          OPENCLAW_UI_WEBKIT=1 pnpm --dir ui exec vitest run --config vitest.config.ts --project=webkit src/app/bridge-proof.browser.test.ts 2>&1 | tee /tmp/postfix.log
+          OPENCLAW_UI_WEBKIT=1 DEBUG=pw:browser* pnpm --dir ui exec vitest run --config vitest.config.ts --project=webkit --maxWorkers=1 src/app/bridge-proof.browser.test.ts 2>&1 | tee /tmp/postfix.log
           echo "PROOF_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
 
       - name: Run proof pre-fix (Date.now from openclaw main)
@@ -74,7 +74,7 @@ jobs:
         run: |
           git fetch --depth=1 https://github.com/openclaw/openclaw.git main:refs/remotes/upstream/main
           git checkout upstream/main -- ui/src/app/native-conversation-bridge.ts
-          OPENCLAW_UI_WEBKIT=1 pnpm --dir ui exec vitest run --config vitest.config.ts --project=webkit src/app/bridge-proof.browser.test.ts 2>&1 | tee /tmp/prefix.log
+          OPENCLAW_UI_WEBKIT=1 DEBUG=pw:browser* pnpm --dir ui exec vitest run --config vitest.config.ts --project=webkit --maxWorkers=1 src/app/bridge-proof.browser.test.ts 2>&1 | tee /tmp/prefix.log
           echo "PROOF_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
 
       - name: Collect verdicts
