@@ -42,6 +42,11 @@ jobs:
           corepack enable
           pnpm install --frozen-lockfile
 
+      - name: Prepare isolated state dir with a valid config
+        run: |
+          mkdir -p "$RUNNER_TEMP/oc-state"
+          cp "$GITHUB_WORKSPACE/openclaw/test/fixtures/state-corpus/2026.9.2/state/openclaw.json" "$RUNNER_TEMP/oc-state/openclaw.json"
+
       - name: Run shipped-worker proof OLD (Date.now heartbeat, 2s rewind)
         working-directory: openclaw
         run: node --import tsx $GITHUB_WORKSPACE/proofrepo/parent-driver.mts
