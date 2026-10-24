@@ -20,19 +20,22 @@ function serve(dir) {
     const server = http.createServer((req, res) => {
       let urlPath = decodeURIComponent(new URL(req.url, "http://x").pathname);
       if (urlPath === "/") urlPath = "/index.html";
-      if (urlPath.includes("..")) { console.log(`[recon][server-403] ${urlPath}`); res.writeHead(403); res.end(); return; }
-      const file = path.join(dir, urlPath);
+      // Strip the gateway mount prefix used by the built SPA (base=/control/chat or /control).
+      let stripped = urlPath.replace(/^\/control\/chat\//, "/").replace(/^\/control\//, "/");
+      if (stripped.includes("..")) { console.log(`[recon][server-403] ${urlPath}`); res.writeHead(403); res.end(); return; }
+      const file = path.join(dir, stripped);
+      if (!file.startsWith(path.resolve(dir))) { res.writeHead(403); res.end(); return; }
       fs.readFile(file, (err, data) => {
         if (err) {
-          if (err.code === "ENOENT") {
-            return fs.readFile(path.join(dir, "index.html"), (e2, d2) => {
-              if (e2) { res.writeHead(404); res.end("nf"); return; }
-              res.writeHead(200, { "content-type": "text/html" }); res.end(d2);
-            });
-          }
-          res.writeHead(404); res.end("nf"); return;
+          const ext = path.extname(stripped).toLowerCase();
+          if (err.code === "ENOENT" && MIME[ext]) { res.writeHead(404); res.end("nf"); return; }
+          // SPA fallback for non-asset paths.
+          return fs.readFile(path.join(dir, "index.html"), (e2, d2) => {
+            if (e2) { res.writeHead(404); res.end("nf"); return; }
+            res.writeHead(200, { "content-type": "text/html" }); res.end(d2);
+          });
         }
-        const ext = path.extname(file).toLowerCase();
+        const ext = path.extname(stripped).toLowerCase();
         res.writeHead(200, { "content-type": MIME[ext] || "application/octet-stream" });
         res.end(data);
       });
