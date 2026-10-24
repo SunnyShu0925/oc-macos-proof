@@ -37,35 +37,27 @@ const nodeCommandsPath = path.join(openclawDir, "src", "infra", "node-commands.t
   }
 }
 
-// ---- 1. node-invoke-progress.ts: OLD/FIXED + wall-clock rewind ----
+// ---- 1. node-invoke-progress.ts: OLD/FIXED heartbeat clock (the wall-clock
+// rewind itself is triggered by worker-entry via IPC, right before the invoke,
+// so it never perturbs worker startup).
 {
   let text = fs.readFileSync(progressPath, "utf8");
-  const rewind = `
-/* --- BUG-189 proof injection (begin) --- */
-const __proofRealDateNow = globalThis.Date.now.bind(globalThis);
-globalThis.__proofSkewApplied = false;
-setTimeout(() => {
-  if (!globalThis.__proofSkewApplied) {
-    globalThis.__proofSkewApplied = true;
-    globalThis.Date.now = () => __proofRealDateNow() - ${skewMs};
-  }
-}, ${armMs});
-/* --- BUG-189 proof injection (end) --- */
-`;
   if (variant === "OLD") {
     text = text.replace(/performance\.now\(\)/g, "Date.now()");
+    fs.writeFileSync(progressPath, text);
+    console.log(`[prepare-proof] rewrote ${progressPath} (variant=OLD, performance.now→Date.now)`);
+  } else {
+    console.log(`[prepare-proof] ${progressPath} left as post-fix (variant=FIXED, performance.now)`);
   }
-  if (!text.includes("__proofSkewApplied")) {
-    text = text.replace(
-      "export function createNodeInvokeProgressWriter",
-      rewind + "\nexport function createNodeInvokeProgressWriter",
-    );
-  }
-  fs.writeFileSync(progressPath, text);
-  console.log(`[prepare-proof] rewrote ${progressPath} (variant=${variant})`);
 }
 
+
 // ---- 2. file-transfer/index.ts: proof.hold duplex command ----
+// Keeps the invoke alive forever so the shipped worker's recurring progress
+// heartbeat keeps firing (proof environment only; never touches the heartbeat
+// scheduling logic). The wall-clock-rewind OLD/FIXED differential is produced by
+// the worker-entry controlled sequence (write -> rewind -> startHeartbeats)
+// below, which runs inside this same worker process with the real transport.
 {
   let text = fs.readFileSync(fileTransferPath, "utf8");
   const injected = `\n  {\n    command: "proof.hold",\n    hasActiveWork: () => true,\n    duplex: true,\n    cap: "file",\n    dangerous: true,\n    handle: async () => {\n      await new Promise(() => {});\n    },\n  },\n`;
