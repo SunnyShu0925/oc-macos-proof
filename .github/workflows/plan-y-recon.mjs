@@ -20,8 +20,8 @@ function serve(dir) {
     const server = http.createServer((req, res) => {
       let urlPath = decodeURIComponent(new URL(req.url, "http://x").pathname);
       if (urlPath === "/") urlPath = "/index.html";
+      if (urlPath.includes("..")) { console.log(`[recon][server-403] ${urlPath}`); res.writeHead(403); res.end(); return; }
       const file = path.join(dir, urlPath);
-      if (!file.startsWith(path.resolve(dir))) { res.writeHead(403); res.end(); return; }
       fs.readFile(file, (err, data) => {
         if (err) {
           if (err.code === "ENOENT") {
