@@ -50,7 +50,7 @@ jobs:
       - name: Run shipped-worker proof OLD (Date.now heartbeat, 2s rewind)
         working-directory: openclaw
         run: |
-          git -C "$GITHUB_WORKSPACE/openclaw" checkout -- src/node-host/node-invoke-progress.ts extensions/file-transfer/index.ts
+          git -C "$GITHUB_WORKSPACE/openclaw" checkout -- src/node-host/node-invoke-progress.ts extensions/file-transfer/index.ts src/infra/node-commands.ts
           OPENCLAW_DIR=$GITHUB_WORKSPACE/openclaw PROOF_VARIANT=OLD node $GITHUB_WORKSPACE/proofrepo/prepare-proof.mjs
           node --import tsx $GITHUB_WORKSPACE/proofrepo/parent-driver.mts
         env:
@@ -58,12 +58,14 @@ jobs:
           WORKER_ENTRY: ${{ github.workspace }}/proofrepo/worker-entry.mts
           OPENCLAW_DIR: ${{ github.workspace }}/openclaw
           PROOF_INTERVAL_MS: ${{ github.event.inputs.interval_ms }}
+          PROOF_OBSERVE_MS: '10000'
+          PROOF_ARM_MS: '3000'
           OPENCLAW_STATE_DIR: ${{ runner.temp }}/oc-state
 
       - name: Run shipped-worker proof FIXED (performance.now heartbeat, 2s rewind)
         working-directory: openclaw
         run: |
-          git -C "$GITHUB_WORKSPACE/openclaw" checkout -- src/node-host/node-invoke-progress.ts extensions/file-transfer/index.ts
+          git -C "$GITHUB_WORKSPACE/openclaw" checkout -- src/node-host/node-invoke-progress.ts extensions/file-transfer/index.ts src/infra/node-commands.ts
           OPENCLAW_DIR=$GITHUB_WORKSPACE/openclaw PROOF_VARIANT=FIXED node $GITHUB_WORKSPACE/proofrepo/prepare-proof.mjs
           node --import tsx $GITHUB_WORKSPACE/proofrepo/parent-driver.mts
         env:
@@ -71,6 +73,8 @@ jobs:
           WORKER_ENTRY: ${{ github.workspace }}/proofrepo/worker-entry.mts
           OPENCLAW_DIR: ${{ github.workspace }}/openclaw
           PROOF_INTERVAL_MS: ${{ github.event.inputs.interval_ms }}
+          PROOF_OBSERVE_MS: '10000'
+          PROOF_ARM_MS: '3000'
           OPENCLAW_STATE_DIR: ${{ runner.temp }}/oc-state
 
       - name: Collect verdict

@@ -14,10 +14,28 @@ const openclawDir = process.env.OPENCLAW_DIR;
 if (!openclawDir) throw new Error("OPENCLAW_DIR is required");
 const variant = process.env.PROOF_VARIANT || "FIXED";
 const skewMs = process.env.PROOF_SKEW_MS || "2000";
-const armMs = process.env.PROOF_ARM_MS || "1200";
+const armMs = process.env.PROOF_ARM_MS || "3000";
 
 const progressPath = path.join(openclawDir, "src", "node-host", "node-invoke-progress.ts");
 const fileTransferPath = path.join(openclawDir, "extensions", "file-transfer", "index.ts");
+const nodeCommandsPath = path.join(openclawDir, "src", "infra", "node-commands.ts");
+
+// ---- 0. Shrink the shipped duplex idle timeout so the heartbeat interval
+// becomes the 250ms minimum (instead of the 5s max derived from the real 30s
+// idle timeout). This only changes heartbeat cadence for observability; the
+// OLD-vs-FIXED distinction (Date.now vs performance.now under a wall-clock
+// rewind) is unchanged.
+{
+  let text = fs.readFileSync(nodeCommandsPath, "utf8");
+  if (!text.includes("BUG-189 proof")) {
+    text = text.replace(
+      "export const NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS = 30_000;",
+      "export const NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS = 500; /* BUG-189 proof: shrink heartbeat to 250ms min for observability */",
+    );
+    fs.writeFileSync(nodeCommandsPath, text);
+    console.log(`[prepare-proof] shrank NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS in ${nodeCommandsPath}`);
+  }
+}
 
 // ---- 1. node-invoke-progress.ts: OLD/FIXED + wall-clock rewind ----
 {
