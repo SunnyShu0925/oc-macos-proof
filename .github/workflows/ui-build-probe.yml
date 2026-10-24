@@ -1,0 +1,57 @@
+name: UI Build Probe (PR #182627 plan-Y recon)
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout openclaw PR branch (fork)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: fix/native-conversation-bridge-deadline-monotonic-172
+          path: openclaw
+
+      - name: Toolchain
+        run: |
+          node -v
+          swift --version
+          xcodebuild -version
+
+      - name: Setup Node (build requirement)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+
+      - name: Install deps (pnpm)
+        working-directory: openclaw
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Prepare Apple Mermaid assets
+        working-directory: openclaw
+        run: |
+          node scripts/prepare-apple-mermaid.mjs
+
+      - name: Build Control UI
+        working-directory: openclaw/ui
+        continue-on-error: true
+        run: |
+          node ../scripts/run-node-package-bin.mts vite build 2>&1 | tee /tmp/uibuild.log
+          echo "BUILD_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+
+      - name: Inspect build output
+        working-directory: openclaw
+        run: |
+          echo "=== BUILD_EXIT=$BUILD_EXIT ==="
+          echo "=== dist/control-ui top ==="
+          ls -la dist/control-ui 2>/dev/null | head -20
+          echo "=== index.html head ==="
+          head -40 dist/control-ui/index.html 2>/dev/null
+          echo "=== gateway refs in index.html ==="
+          grep -ioE "(gateway|/control/|api/|ws://|wss://|VITE_[A-Z_]+)" dist/control-ui/index.html 2>/dev/null | sort -u | head
+          echo "=== build log tail ==="
+          tail -25 /tmp/uibuild.log
