@@ -25,10 +25,25 @@ jobs:
           swift --version
           xcodebuild -version
 
+      - name: Setup Node (build plugin requirement)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+
+      - name: Prepare Apple Mermaid assets
+        working-directory: openclaw
+        run: |
+          node -v
+          if [[ -f scripts/prepare-apple-mermaid.mjs ]]; then
+            node scripts/prepare-apple-mermaid.mjs
+          fi
+
       - name: Run real native WKWebView bridge XCTest (post-fix head)
         working-directory: openclaw
         continue-on-error: true
         run: |
+          which node
+          node -v
           swift test --package-path apps/macos --filter NativeConversationBridgeTests 2>&1 | tee /tmp/postfix.log
           echo "PROOF_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
 
