@@ -62,22 +62,35 @@ await writer.write("first chunk"); // stamps lastProgressAt on pre-rewind clock
 Date.now = () => realDateNow() - skewMs; // rewind wall clock
 const t0 = performance.now();
 writer.startHeartbeats();
-let elapsedToHeartbeat = null;
+const arriveMs = []; // elapsed ms of each empty-progress heartbeat arrival
+let consumed = 0;
 const deadline = performance.now() + 4_000;
-while (performance.now() < deadline) {
-  const heartbeat = received.find((f) => f.params?.chunk === "");
-  if (heartbeat) {
-    elapsedToHeartbeat = (performance.now() - t0).toFixed(0);
-    break;
+while (performance.now() < deadline && arriveMs.length < 6) {
+  const idx = received.findIndex((f, i) => i >= consumed && f.params?.chunk === "");
+  if (idx >= 0) {
+    arriveMs.push(Math.round(performance.now() - t0));
+    consumed = idx + 1;
   }
   await new Promise((r) => setTimeout(r, 5));
 }
 writer.stop();
 Date.now = realDateNow; // restore before shipped worker starts
 
+const first = arriveMs[0];
 console.log(
-  `[controlled] variant=${process.env.PROOF_VARIANT} skew=${skewMs}ms firstHeartbeatElapsed=${elapsedToHeartbeat ?? "none>4000"}ms`,
+  `[controlled] variant=${process.env.PROOF_VARIANT} skew=${skewMs}ms firstHeartbeatElapsed=${first ?? "none>4000"}ms arriveMs=${JSON.stringify(arriveMs)}`,
 );
+// ASCII timeline (media proof): first heartbeat lands at ~interval+skew (OLD) vs ~interval (FIXED).
+if (first != null) {
+  const scale = 8; // chars per 250ms
+  const n = Math.ceil(first / 250) + 2;
+  const marks = new Array(n).fill(".");
+  for (const t of arriveMs) {
+    const k = Math.floor(t / 250);
+    if (k < n) marks[k] = "#";
+  }
+  console.log(`[timeline] ${process.env.PROOF_VARIANT} |${marks.join("")}| first@${first}ms`);
+}
 
 // ---- (2) Shipped worker: real node-host worker entry ----
 const workerUrl = pathToFileURL(path.join(openclawDir, "src", "node-host", "worker.ts")).href;
