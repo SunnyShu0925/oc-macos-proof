@@ -1,0 +1,47 @@
+name: macOS Native WKWebView Bridge XCTest (PR #182627)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: PR branch on SunnyShu0925/openclaw to test
+        required: true
+        default: fix/native-conversation-bridge-deadline-monotonic-172
+
+jobs:
+  proof:
+    runs-on: macos-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout openclaw PR branch (fork)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ github.event.inputs.pr_branch }}
+          path: openclaw
+
+      - name: Toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Run real native WKWebView bridge XCTest (post-fix head)
+        working-directory: openclaw
+        continue-on-error: true
+        run: |
+          swift test --package-path apps/macos --filter NativeConversationBridgeTests 2>&1 | tee /tmp/postfix.log
+          echo "PROOF_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+
+      - name: Collect
+        if: always()
+        run: |
+          echo "=== POST-FIX tail ==="
+          tail -40 /tmp/postfix.log 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-native-xctest-logs
+          path: |
+            /tmp/postfix.log
+            /tmp/prefix.log
