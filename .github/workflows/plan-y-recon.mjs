@@ -15,7 +15,8 @@ const MIME = {
   ".map": "application/json",
 };
 
-function serve(dir) {
+function serve(dirArg) {
+  const dir = path.resolve(dirArg);
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       let urlPath = decodeURIComponent(new URL(req.url, "http://x").pathname);
