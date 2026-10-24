@@ -9,36 +9,25 @@ import path from "node:path";
 const DIST = process.env.CONTROL_UI_DIST || path.resolve("dist/control-ui");
 
 const MIME = {
-  ".html": "text/html",
-  ".js": "text/javascript",
-  ".mjs": "text/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".wasm": "application/wasm",
-  ".webmanifest": "application/manifest+json",
+  ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript",
+  ".css": "text/css", ".json": "application/json", ".svg": "image/svg+xml",
+  ".png": "image/png", ".wasm": "application/wasm", ".webmanifest": "application/manifest+json",
   ".map": "application/json",
 };
 
-// Simple static server for the built UI.
 function serve(dir) {
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       let urlPath = decodeURIComponent(new URL(req.url, "http://x").pathname);
       if (urlPath === "/") urlPath = "/index.html";
       const file = path.join(dir, urlPath);
-      if (!file.startsWith(path.resolve(dir))) {
-        res.writeHead(403); res.end("forbidden"); return;
-      }
+      if (!file.startsWith(path.resolve(dir))) { res.writeHead(403); res.end(); return; }
       fs.readFile(file, (err, data) => {
         if (err) {
-          // Fall back to index.html for SPA routes.
-          if (!err.code || err.code === "ENOENT") {
+          if (err.code === "ENOENT") {
             return fs.readFile(path.join(dir, "index.html"), (e2, d2) => {
               if (e2) { res.writeHead(404); res.end("nf"); return; }
-              res.writeHead(200, { "content-type": "text/html" });
-              res.end(d2);
+              res.writeHead(200, { "content-type": "text/html" }); res.end(d2);
             });
           }
           res.writeHead(404); res.end("nf"); return;
@@ -61,46 +50,35 @@ async function main() {
   const browser = await webkit.launch({ headless: true });
   const page = await browser.newPage();
 
-  const observed = [];
-  const push = (tag, msg) => { observed.push(`[${tag}] ${msg}`); console.log(`[recon][${tag}] ${msg}`); };
-
-  // Capture console + network
-  page.on("console", (m) => push("console", `${m.type()}: ${m.text().slice(0, 300)}`));
+  page.on("console", (m) => console.log(`[recon][console ${m.type()}] ${m.text().slice(0, 300)}`));
   page.on("request", (r) => {
     const u = r.url();
     if (!u.startsWith(base + "/assets/") && !u.startsWith("data:")) {
-      push("request", `${r.method()} ${u}`);
+      console.log(`[recon][request] ${r.method()} ${u}`);
     }
   });
-  page.on("response", (r) => {
-    const u = r.url();
-    if (!u.startsWith(base + "/assets/")) {
-      push("response", `${r.status()} ${r.method()} ${u}`);
-    }
-  });
-  page.on("requestfailed", (r) => push("requestfailed", `${r.failure()?.errorText} ${r.url()}`));
+  page.on("requestfailed", (r) => console.log(`[recon][requestfailed] ${r.failure()?.errorText} ${r.url()}`));
 
-  // Inject native chrome + embed + mock handler BEFORE app scripts run.
   await page.addInitScript(() => {
     window.__OPENCLAW_NATIVE_EMBED__ = { platform: "macos", formFactor: "desktop", surface: "conversation" };
     window.__OPENCLAW_NATIVE_WEB_CHROME__ = true;
     const nativeMessages = [];
     window.__NATIVE_MESSAGES__ = nativeMessages;
-    const handler = {
+    window.__MOCK_NATIVE__ = {
       postMessage: async (msg) => {
         nativeMessages.push(msg);
         console.log("[native-post]", JSON.stringify(msg).slice(0, 300));
-        // Accept ready/state; a navigate command gets ok:true to simulate host ack.
         return { ok: true };
       },
     };
     Object.defineProperty(window, "webkit", {
       value: {
         messageHandlers: {
-          openclawConversation: handler,
-          openclawDeviceSettings: { postMessage: async () => ({ ok: true }) },
-          openclawNotifications: { postMessage: async () => ({ ok: true }) },
-          openclawGateways: { postMessage: async () => ({ ok: true }) },
+          openclawConversation: window.__MOCK_NATIVE__,
+          openclawDeviceSettings: window.__MOCK_NATIVE__,
+          openclawNotifications: window.__MOCK_NATIVE__,
+          openclawGateways: window.__MOCK_NATIVE__,
+          openclawWindowDrag: { postMessage: async () => ({ ok: true }) },
         },
       },
       configurable: true,
@@ -108,34 +86,31 @@ async function main() {
     window.addEventListener("error", (e) => console.log("[page-error]", e.message));
   });
 
-  push("load", `navigating to ${base}/control/chat/main`);
+  console.log(`[recon][load] navigating to ${base}/control/chat/main`);
   await page.goto(`${base}/control/chat/main`, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-  // Wait and sample state.
-  for (const delay of [2000, 5000, 10000, 15000]) {
-    await page.waitForTimeout(delay === 2000 ? 2000 : delay - [0, 2000, 5000, 10000][[2000, 5000, 10000, 15000].indexOf(delay)]);
+  for (const delay of [2000, 5000, 10000]) {
+    await page.waitForTimeout(delay === 2000 ? 2000 : delay === 5000 ? 3000 : 5000);
     const info = await page.evaluate(() => {
       const w = window;
+      const body = document.body ? (document.body.innerText || document.body.textContent || "") : "";
       return {
         readyState: document.readyState,
         location: location.href,
         title: document.title,
         nativeMessages: (w.__NATIVE_MESSAGES__ || []).map((m) => m && m.type),
         hasConversationDoc: !!(w.__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__),
-        conversationDoc: w.__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__ ? JSON.stringify(w.__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__) : null,
-        bodyText: (document.body ? document.body.innerText || document.body.textContent : "").slice(0, 200),
-        hasChatPage: !!document.querySelector("openclaw-chat-page"),
-        hasChatPane: !!document.querySelector("openclaw-chat-pane"),
-        routeOutlet: !!w.__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__,
+        conversationDoc: w.__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__
+          ? JSON.stringify(w.__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__).slice(0, 200) : null,
+        bodyText: body.slice(0, 200),
       };
     });
     console.log(`[recon][sample t=${delay}ms] ${JSON.stringify(info)}`);
   }
 
-  // Dump all native messages
   const all = await page.evaluate(() => window.__NATIVE_MESSAGES__ || []);
   console.log(`[recon] total native messages: ${all.length}`);
-  for (const m of all.slice(0, 20)) {
+  for (const m of all.slice(0, 25)) {
     console.log(`[recon][native-msg] ${JSON.stringify(m).slice(0, 300)}`);
   }
 
