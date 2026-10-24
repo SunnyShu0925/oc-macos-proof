@@ -1,0 +1,62 @@
+name: Plan-Y Recon (real UI in WebKit)
+on:
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: fork PR branch to check out
+        required: true
+        default: fix/native-conversation-bridge-deadline-monotonic-172
+
+jobs:
+  recon:
+    runs-on: macos-latest
+    timeout-minutes: 50
+    steps:
+      - name: Checkout openclaw PR branch (fork)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ inputs.pr_branch }}
+          path: openclaw
+
+      - name: Setup Node (build requirement)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+
+      - name: Install deps (pnpm)
+        working-directory: openclaw
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Prepare Apple Mermaid assets
+        working-directory: openclaw
+        run: node scripts/prepare-apple-mermaid.mjs
+
+      - name: Install Playwright WebKit
+        working-directory: openclaw
+        run: pnpm --dir ui exec playwright install --with-deps webkit
+
+      - name: Build Control UI
+        working-directory: openclaw/ui
+        continue-on-error: true
+        run: |
+          node ../scripts/run-node-package-bin.mts vite build 2>&1 | tee /tmp/uibuild.log
+          echo "BUILD_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+
+      - name: Run plan-Y recon
+        working-directory: openclaw/ui
+        continue-on-error: true
+        run: |
+          echo "=== BUILD_EXIT=$BUILD_EXIT ==="
+          cp $GITHUB_WORKSPACE/proofrepo/.github/workflows/plan-y-recon.mjs plan-y-recon.mjs
+          CONTROL_UI_DIST=../dist/control-ui node plan-y-recon.mjs 2>&1 | tee /tmp/recon.log
+          echo "RECON_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+
+      - name: Upload recon log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-y-recon-log
+          path: /tmp/recon.log
