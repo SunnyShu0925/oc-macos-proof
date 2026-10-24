@@ -36,6 +36,11 @@ jobs:
           corepack enable
           pnpm install --frozen-lockfile
 
+      - name: Prepare Apple Mermaid assets (required by OpenClawChatUI resource bundle)
+        working-directory: openclaw
+        run: |
+          node scripts/prepare-apple-mermaid.mjs
+
       - name: Run real native WKWebView bridge XCTest (post-fix head)
         working-directory: openclaw
         continue-on-error: true
