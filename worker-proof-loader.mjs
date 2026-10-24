@@ -15,6 +15,7 @@ export async function load(url, context, defaultLoad) {
   const text = Buffer.isBuffer(src.source) ? src.source.toString("utf8") : String(src.source);
 
   if (url.endsWith("src/node-host/plugin-node-host.ts")) {
+    console.error("[loader] matched plugin-node-host.ts");
     const modified = text.replace(
       "loadPluginRegistryHandle({",
       "loadPluginRegistryHandle({ onlyPluginIds: [\"file-transfer\"],",
@@ -23,6 +24,7 @@ export async function load(url, context, defaultLoad) {
   }
 
   if (url.endsWith("extensions/file-transfer/index.ts")) {
+    console.error("[loader] matched file-transfer/index.ts");
     // Append a proof-only duplex command whose handler parks forever, keeping the
     // invocation alive so the progress writer keeps emitting heartbeats. This
     // does not alter production heartbeat scheduling (node-invoke-progress.ts).
@@ -49,6 +51,7 @@ export async function load(url, context, defaultLoad) {
   }
 
   if (url.endsWith("src/node-host/node-invoke-progress.ts")) {
+    console.error("[loader] matched node-invoke-progress.ts");
     const variant = process.env.PROOF_VARIANT || "FIXED";
     const skewMs = process.env.PROOF_SKEW_MS || "2000";
     const armMs = process.env.PROOF_ARM_MS || "1200";

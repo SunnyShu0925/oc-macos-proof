@@ -38,7 +38,7 @@ function parse(line) {
 
 async function main() {
   const child = fork(WORKER_ENTRY, [], {
-    execArgv: ["--import", "tsx", "--loader", LOADER],
+    execArgv: ["--import", "tsx"],
     stdio: ["pipe", "pipe", "pipe", "ipc"],
     env: { ...process.env, PROOF_VARIANT: VARIANT, PROOF_SKEW_MS: String(SKEW_MS) },
   });
