@@ -20,15 +20,11 @@ const OBSERVE_MS = Number(process.env.PROOF_OBSERVE_MS || 6000);
 const FRAME = {
   id: "invoke-bug189",
   nodeId: "node-1",
-  // duplex:true command -> the handler blocks waiting for input on the duplex
-  // channel, so the invocation stays alive and the progress writer keeps
-  // emitting heartbeats for the whole observe window.
-  command: "file.create",
-  paramsJSON: JSON.stringify({
-    sizeBytes: 1,
-    expectedSha256: "0".repeat(64),
-    path: "/tmp/bug189-proof.bin",
-  }),
+  // Proof-only duplex command injected by the ESM loader into file-transfer; its
+  // handler parks forever, so the invocation stays alive and the progress writer
+  // keeps emitting heartbeats for the whole observe window.
+  command: "proof.hold",
+  paramsJSON: null,
   timeoutMs: 60000,
 };
 

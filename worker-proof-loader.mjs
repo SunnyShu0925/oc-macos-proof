@@ -22,6 +22,32 @@ export async function load(url, context, defaultLoad) {
     return { ...src, source: modified };
   }
 
+  if (url.endsWith("extensions/file-transfer/index.ts")) {
+    // Append a proof-only duplex command whose handler parks forever, keeping the
+    // invocation alive so the progress writer keeps emitting heartbeats. This
+    // does not alter production heartbeat scheduling (node-invoke-progress.ts).
+    const injected = `
+  {
+    command: "proof.hold",
+    hasActiveWork: () => true,
+    duplex: true,
+    cap: "file",
+    dangerous: true,
+    handle: async () => {
+      await new Promise(() => {});
+    },
+  },
+`;
+    if (!text.includes("command: \"proof.hold\"")) {
+      const modified = text.replace(
+        "const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [",
+        "const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [" + injected,
+      );
+      return { ...src, source: modified };
+    }
+    return src;
+  }
+
   if (url.endsWith("src/node-host/node-invoke-progress.ts")) {
     const variant = process.env.PROOF_VARIANT || "FIXED";
     const skewMs = process.env.PROOF_SKEW_MS || "2000";
