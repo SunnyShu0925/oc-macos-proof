@@ -1,7 +1,7 @@
 // Plan-Y recon: load the REAL built Control UI in WebKit, inject native embed + mock
 // messageHandlers.openclawConversation, and observe how far startup gets / what the
 // gateway does / whether the native bridge instantiates.
-import { chromium, webkit } from "@playwright/test";
+import { webkit } from "playwright";
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
