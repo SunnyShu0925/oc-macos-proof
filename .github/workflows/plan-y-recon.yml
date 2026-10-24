@@ -12,6 +12,13 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 50
     steps:
+      - name: Checkout proof repo (oc-macos-proof)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: main
+          path: proofrepo
+
       - name: Checkout openclaw PR branch (fork)
         uses: actions/checkout@v4
         with:
