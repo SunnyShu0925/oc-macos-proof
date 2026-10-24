@@ -51,6 +51,7 @@ async function main() {
     rl.on("line", (line) => {
       const m = parse(line);
       if (m?.type === "ready") res(true);
+      else if (!m) console.log(line); // forward non-JSON worker stdout (e.g. [controlled])
     });
   });
 
