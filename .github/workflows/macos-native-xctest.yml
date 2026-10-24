@@ -30,14 +30,6 @@ jobs:
         with:
           node-version: 24.22.1
 
-      - name: Prepare Apple Mermaid assets
-        working-directory: openclaw
-        run: |
-          node -v
-          if [[ -f scripts/prepare-apple-mermaid.mjs ]]; then
-            node scripts/prepare-apple-mermaid.mjs
-          fi
-
       - name: Run real native WKWebView bridge XCTest (post-fix head)
         working-directory: openclaw
         continue-on-error: true
