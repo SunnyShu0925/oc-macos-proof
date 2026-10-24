@@ -1,0 +1,101 @@
+name: WebKit Native-Bridge Proof (PR #182627)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: PR branch on SunnyShu0925/openclaw to test
+        required: true
+        default: fix/native-conversation-bridge-deadline-monotonic-172
+
+jobs:
+  proof:
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - name: Checkout openclaw PR branch (fork)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ github.event.inputs.pr_branch }}
+          path: openclaw
+
+      - name: Checkout proof scripts
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: main
+          path: proofrepo
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install deps (pnpm)
+        working-directory: openclaw
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Install Playwright WebKit
+        working-directory: openclaw
+        run: pnpm --dir ui exec playwright install --with-deps webkit
+
+      - name: Write bridge proof test and register in webkit suite
+        working-directory: openclaw
+        run: |
+          cp $GITHUB_WORKSPACE/proofrepo/.github/workflows/bridge-proof.browser.test.ts ui/src/app/bridge-proof.browser.test.ts
+          # Register the proof file in the webkit project's fixed include list.
+          python3 - <<'PY'
+          import re
+          p = "ui/vitest.config.ts"
+          s = open(p).read()
+          marker = '"src/components/settings-ui.browser.test.tsx",'
+          add = marker + '\n  "src/app/bridge-proof.browser.test.ts",'
+          if "bridge-proof.browser.test.ts" not in s:
+              s = s.replace(marker, add, 1)
+              open(p, "w").write(s)
+              print("registered bridge-proof in webkitTestFiles")
+          else:
+              print("already registered")
+          PY
+
+      - name: Run proof post-fix (performance.now)
+        working-directory: openclaw
+        continue-on-error: true
+        run: |
+          OPENCLAW_UI_WEBKIT=1 pnpm --dir ui exec vitest run --config vitest.config.ts --project=webkit src/app/bridge-proof.browser.test.ts 2>&1 | tee /tmp/postfix.log
+          echo "PROOF_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+
+      - name: Run proof pre-fix (Date.now from openclaw main)
+        working-directory: openclaw
+        continue-on-error: true
+        run: |
+          git fetch --depth=1 https://github.com/openclaw/openclaw.git main:refs/remotes/upstream/main
+          git checkout upstream/main -- ui/src/app/native-conversation-bridge.ts
+          OPENCLAW_UI_WEBKIT=1 pnpm --dir ui exec vitest run --config vitest.config.ts --project=webkit src/app/bridge-proof.browser.test.ts 2>&1 | tee /tmp/prefix.log
+          echo "PROOF_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+
+      - name: Collect verdicts
+        if: always()
+        run: |
+          echo "=== POST-FIX (performance.now) ==="
+          grep -E "\[proof\]|VERDICT" /tmp/postfix.log 2>/dev/null || echo "no verdict (see full log below)"
+          echo ""
+          echo "=== PRE-FIX (Date.now) ==="
+          grep -E "\[proof\]|VERDICT" /tmp/prefix.log 2>/dev/null || echo "no verdict (see full log below)"
+          echo ""
+          echo "=== POST-FIX FULL TAIL ==="
+          tail -25 /tmp/postfix.log 2>/dev/null || true
+          echo ""
+          echo "=== PRE-FIX FULL TAIL ==="
+          tail -25 /tmp/prefix.log 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: webkit-proof-logs
+          path: |
+            /tmp/postfix.log
+            /tmp/prefix.log
