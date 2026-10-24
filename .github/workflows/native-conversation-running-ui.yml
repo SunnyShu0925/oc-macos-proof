@@ -1,0 +1,88 @@
+name: Native conversation running UI proof (PR #182627)
+
+on:
+  workflow_dispatch:
+    inputs:
+      head:
+        required: true
+        default: c7fb8202e193c22be02eee2ea280771d0d07f54f
+
+jobs:
+  proof:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ inputs.head }}
+          path: openclaw
+      - uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: main
+          path: proofrepo
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+      - name: Install
+        working-directory: openclaw
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm --dir ui exec playwright install --with-deps webkit
+      - name: Register proof runner
+        working-directory: openclaw
+        run: |
+          cp "$GITHUB_WORKSPACE/proofrepo/.github/workflows/native-conversation-running-ui.browser.test.ts" ui/src/e2e/native-conversation-running-ui.browser.test.ts
+          node -e '
+            const fs = require("fs");
+            const file = "ui/vitest.config.ts";
+            let source = fs.readFileSync(file, "utf8");
+            const marker = "  \"src/components/settings-ui.browser.test.tsx\",";
+            const entry = "\n  \"src/e2e/native-conversation-running-ui.browser.test.ts\",";
+            if (!source.includes(entry.trim())) source = source.replace(marker, marker + entry);
+            fs.writeFileSync(file, source);
+          '
+      - name: Run production Control UI in WebKit
+        working-directory: openclaw
+        continue-on-error: true
+        run: |
+          set +e
+          OPENCLAW_UI_WEBKIT=1 pnpm --dir ui exec vitest run \
+            --config vitest.config.ts --project=webkit --maxWorkers=1 \
+            src/e2e/native-conversation-running-ui.browser.test.ts 2>&1 | tee /tmp/postfix.log
+          echo "POSTFIX_EXIT=${PIPESTATUS[0]}" | tee -a "$GITHUB_ENV"
+      - name: Run base bridge in identical WebKit UI
+        working-directory: openclaw
+        continue-on-error: true
+        run: |
+          set +e
+          git fetch --depth=1 https://github.com/openclaw/openclaw.git main:refs/remotes/upstream/main
+          git checkout upstream/main -- ui/src/app/native-conversation-bridge.ts
+          OPENCLAW_UI_WEBKIT=1 pnpm --dir ui exec vitest run \
+            --config vitest.config.ts --project=webkit --maxWorkers=1 \
+            src/e2e/native-conversation-running-ui.browser.test.ts 2>&1 | tee /tmp/prefix.log
+          echo "PREFIX_EXIT=${PIPESTATUS[0]}" | tee -a "$GITHUB_ENV"
+      - name: Report
+        if: always()
+        run: |
+          echo "PR_HEAD=$(git -C openclaw rev-parse HEAD)"
+          echo "BASE=$(git -C openclaw rev-parse upstream/main)"
+          echo "POSTFIX_EXIT=${POSTFIX_EXIT:-missing}"
+          echo "PREFIX_EXIT=${PREFIX_EXIT:-missing}"
+          grep -E '\[proof\]|VERDICT' /tmp/postfix.log || true
+          grep -E '\[proof\]|VERDICT' /tmp/prefix.log || true
+          echo "=== POST-FIX TAIL ==="
+          tail -40 /tmp/postfix.log || true
+          echo "=== PRE-FIX TAIL ==="
+          tail -40 /tmp/prefix.log || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-conversation-running-ui-logs
+          path: |
+            /tmp/postfix.log
+            /tmp/prefix.log
