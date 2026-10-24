@@ -1,0 +1,18 @@
+name: Probe macOS Swift/Xcode Toolchain
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - name: Toolchain versions
+        run: |
+          echo "=== swift ==="
+          swift --version 2>&1
+          echo "=== xcodebuild ==="
+          xcodebuild -version 2>&1
+          echo "=== macos ==="
+          sw_vers 2>&1
