@@ -2,7 +2,7 @@
 // entry (runNodeHostWorker), drives real JSONL frames over its stdin
 // (gateway-connection, then a duplex invoke), acks real gateway-requests over
 // the bridge, and measures the real heartbeat cadence (empty progress chunks)
-// under a 2s wall-clock rewind injected by the ESM loader into the worker.
+// under a 2s wall-clock rewind injected into the CI checkout source.
 //
 //   post-fix (performance.now): heartbeat gaps stay ~HEARTBEAT_INTERVAL_MS
 //   pre-fix  (Date.now):        a gap of ~(interval + skew) appears after rewind
@@ -11,7 +11,6 @@ import { createInterface } from "node:readline";
 import { performance } from "node:perf_hooks";
 
 const WORKER_ENTRY = process.env.WORKER_ENTRY;
-const LOADER = process.env.PROOF_LOADER;
 const VARIANT = process.env.PROOF_VARIANT || "FIXED";
 const SKEW_MS = Number(process.env.PROOF_SKEW_MS || 2000);
 const HEARTBEAT_INTERVAL_MS = Number(process.env.PROOF_INTERVAL_MS || 250);
@@ -20,7 +19,7 @@ const OBSERVE_MS = Number(process.env.PROOF_OBSERVE_MS || 6000);
 const FRAME = {
   id: "invoke-bug189",
   nodeId: "node-1",
-  // Proof-only duplex command injected by the ESM loader into file-transfer; its
+  // Proof-only duplex command injected by prepare-proof.mjs into file-transfer; its
   // handler parks forever, so the invocation stays alive and the progress writer
   // keeps emitting heartbeats for the whole observe window.
   command: "proof.hold",

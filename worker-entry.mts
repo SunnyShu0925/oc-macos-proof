@@ -1,17 +1,13 @@
 // Worker entry for BUG-189 shipped-entry proof. The shipped node-host worker
 // (src/node-host/worker.ts) has no standalone main block, so this thin entry
 // invokes its exported runNodeHostWorker — the real shipped entry function.
-import { register } from "node:module";
+//
+// The OLD/FIXED heartbeat variant and proof.hold duplex command are injected
+// directly into the CI checkout's source files by prepare-proof.mjs BEFORE this
+// entry runs, so no ESM loader is needed here (the ESM loader is unreliable
+// because the shipped runtime mutates process.env during module load).
 import { pathToFileURL } from "node:url";
 import path from "node:path";
-
-// Register the proof ESM loader BEFORE importing openclaw modules, so the loader
-// can (a) rewrite node-invoke-progress.ts OLD/FIXED and inject the wall-clock
-// rewind, and (b) inject the proof.hold duplex command into file-transfer.
-if (process.env.PROOF_LOADER) {
-  register(pathToFileURL(process.env.PROOF_LOADER).href);
-  console.error(`[worker-entry] registered loader ${process.env.PROOF_LOADER}`);
-}
 
 const openclawDir = process.env.OPENCLAW_DIR;
 if (!openclawDir) {

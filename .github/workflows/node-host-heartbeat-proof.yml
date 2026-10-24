@@ -49,22 +49,26 @@ jobs:
 
       - name: Run shipped-worker proof OLD (Date.now heartbeat, 2s rewind)
         working-directory: openclaw
-        run: node --import tsx $GITHUB_WORKSPACE/proofrepo/parent-driver.mts
+        run: |
+          git -C "$GITHUB_WORKSPACE/openclaw" checkout -- src/node-host/node-invoke-progress.ts extensions/file-transfer/index.ts
+          OPENCLAW_DIR=$GITHUB_WORKSPACE/openclaw PROOF_VARIANT=OLD node $GITHUB_WORKSPACE/proofrepo/prepare-proof.mjs
+          node --import tsx $GITHUB_WORKSPACE/proofrepo/parent-driver.mts
         env:
           PROOF_VARIANT: OLD
           WORKER_ENTRY: ${{ github.workspace }}/proofrepo/worker-entry.mts
-          PROOF_LOADER: ${{ github.workspace }}/proofrepo/worker-proof-loader.mjs
           OPENCLAW_DIR: ${{ github.workspace }}/openclaw
           PROOF_INTERVAL_MS: ${{ github.event.inputs.interval_ms }}
           OPENCLAW_STATE_DIR: ${{ runner.temp }}/oc-state
 
       - name: Run shipped-worker proof FIXED (performance.now heartbeat, 2s rewind)
         working-directory: openclaw
-        run: node --import tsx $GITHUB_WORKSPACE/proofrepo/parent-driver.mts
+        run: |
+          git -C "$GITHUB_WORKSPACE/openclaw" checkout -- src/node-host/node-invoke-progress.ts extensions/file-transfer/index.ts
+          OPENCLAW_DIR=$GITHUB_WORKSPACE/openclaw PROOF_VARIANT=FIXED node $GITHUB_WORKSPACE/proofrepo/prepare-proof.mjs
+          node --import tsx $GITHUB_WORKSPACE/proofrepo/parent-driver.mts
         env:
           PROOF_VARIANT: FIXED
           WORKER_ENTRY: ${{ github.workspace }}/proofrepo/worker-entry.mts
-          PROOF_LOADER: ${{ github.workspace }}/proofrepo/worker-proof-loader.mjs
           OPENCLAW_DIR: ${{ github.workspace }}/openclaw
           PROOF_INTERVAL_MS: ${{ github.event.inputs.interval_ms }}
           OPENCLAW_STATE_DIR: ${{ runner.temp }}/oc-state
