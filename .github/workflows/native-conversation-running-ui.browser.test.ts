@@ -16,13 +16,19 @@ type Probe = {
   realDateNow: typeof Date.now;
 };
 
+type Variant = {
+  label: string;
+  ok: boolean;
+  error?: string;
+};
+
 const first = { agentId: "main", sessionKey: "agent:main:first" };
 const second = { agentId: "main", sessionKey: "agent:main:second" };
 
 async function installHost(page: Page, version: string) {
   await page.addInitScript((proofVersion) => {
     const realDateNow = Date.now;
-    const probe = {
+    const probe: Probe = {
       messages: [],
       documentId: "",
       dateJumpMs: 0,
@@ -51,9 +57,7 @@ async function installHost(page: Page, version: string) {
         },
       },
     });
-    // Keep the wall clock unchanged until the target command is queued.
-    (window as unknown as { Date: DateConstructor }).Date.now = () =>
-      realDateNow() + probe.dateJumpMs;
+    Date.now = () => realDateNow() + probe.dateJumpMs;
     document.addEventListener("DOMContentLoaded", () => {
       document.documentElement.style.setProperty("--openclaw-native-titlebar-height", "52px");
     });
@@ -63,13 +67,12 @@ async function installHost(page: Page, version: string) {
 async function command(page: Page, target: typeof first, requestId: string) {
   await page.evaluate(
     ({ targetSession, id }) => {
-      const probe = (window as unknown as { __nativeConversationProof: Probe })
-        .__nativeConversationProof;
+      const state = Reflect.get(window, "__nativeConversationProof") as Probe;
       window.dispatchEvent(
         new CustomEvent("openclaw:native-conversation-command", {
           detail: {
             contract: 1,
-            documentId: probe.documentId,
+            documentId: state.documentId,
             requestId: id,
             type: "navigate",
             payload: targetSession,
@@ -83,41 +86,49 @@ async function command(page: Page, target: typeof first, requestId: string) {
 
 async function result(page: Page, requestId: string) {
   return page.evaluate((id) => {
-    const probe = (window as unknown as { __nativeConversationProof: Probe })
-      .__nativeConversationProof;
-    return probe.messages.find(
+    const state = Reflect.get(window, "__nativeConversationProof") as Probe;
+    return state.messages.find(
       (message) => message.type === "command-result" && message.requestId === id,
     );
   }, requestId);
 }
 
-async function stateRoute(page: Page, version: string) {
-  return page.evaluate((proofVersion) => {
-    const probe = (window as unknown as { __nativeConversationProof: Probe })
-      .__nativeConversationProof;
-    return {
-      state: probe.messages.findLast((message) => message.type === "state")?.context ?? null,
-      pathname: window.location.pathname,
-      version: proofVersion,
-    };
-  }, version);
+async function waitForResult(page: Page, requestId: string) {
+  const deadline = performance.now() + 20_000;
+  while (performance.now() < deadline) {
+    const receipt = await result(page, requestId);
+    if (receipt) {
+      return receipt;
+    }
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`No command receipt for ${requestId} within 20s`);
 }
 
-async function mountCase(version: "post-fix" | "pre-fix") {
+function sessionKey(params: unknown) {
+  if (typeof params !== "object" || params === null || !("sessionKey" in params)) {
+    throw new Error("chat.startup has no sessionKey");
+  }
+  return String(params.sessionKey);
+}
+
+async function mountCase(variant: Variant, buildId: string) {
   const out = await mkdtemp(path.join(os.tmpdir(), "native-running-ui-"));
   await mkdir(out, { recursive: true });
-  const buildId = `native-running-${version}`;
   const server = await startProductionControlUiE2eServer(out, buildId);
   const browser = await webkit.launch();
-  const context = await browser.newContext({ serviceWorkers: "block" });
+  const context = await browser.newContext({
+    serviceWorkers: "block",
+    viewport: { width: 1280, height: 900 },
+  });
   const page = await context.newPage();
   try {
-    await installHost(page, version);
+    await installHost(page, variant.label);
     const gateway = await installMockGateway(page, {
       serverBuildId: buildId,
-      sessions: [first, second].map(({ sessionKey }) => ({
-        key: sessionKey,
-        label: sessionKey,
+      sessions: [first, second].map(({ sessionKey: key }) => ({
+        key,
+        label: key,
         kind: "direct",
       })),
     });
@@ -126,57 +137,97 @@ async function mountCase(version: "post-fix" | "pre-fix") {
       .locator(".chat-pane-cache__pane--visible .agent-chat__composer-combobox textarea")
       .waitFor();
     console.log(
-      `[proof] ${version} WebKit=${browser.version()} URL=${page.url()} initial=${JSON.stringify(await stateRoute(page, version))}`,
-    );
-    // Defer the first navigation's real session load. The bridge must not reach
-    // the router for the second command until this real router promise settles.
-    const before = (await gateway.getRequests("chat.startup")).length;
-    expect(await gateway.deferNext("chat.startup")).toBe(0);
-    await command(page, first, "first");
-    const firstRequest = await gateway.waitForRequest("chat.startup", { after: before });
-    console.log(
-      `[proof] ${version} router RPC #1 chat.startup params=${JSON.stringify(firstRequest.params)}`,
+      `[proof] ${variant.label} WebKit=${await browser.version()} initial = ${new URL(page.url()).pathname}`,
     );
 
-    const callsBeforeSecond = (await gateway.getRequests("chat.startup")).length;
-    await command(page, second, "second");
-    await page.waitForTimeout(500);
-    const routeBeforeRelease = await stateRoute(page, version);
-    expect((await gateway.getRequests("chat.startup")).length).toBe(callsBeforeSecond);
-    expect(await result(page, "second")).toBeUndefined();
+    const firstIndex = (await gateway.getRequests("chat.startup")).length;
+    expect(await gateway.deferNext("chat.startup")).toBe(firstIndex);
+    await command(page, first, "first");
+    const firstRequest = await gateway.waitForRequest("chat.startup", { after: firstIndex });
+    expect(sessionKey(firstRequest.params)).toBe(first.sessionKey);
     console.log(
-      `[proof] ${version} queue: second command received; router calls=${callsBeforeSecond}; result absent; route=${JSON.stringify(routeBeforeRelease)}`,
+      `[proof] ${variant.label} actual router RPC #${firstIndex + 1} chat.startup session=${sessionKey(firstRequest.params)} (held)`,
     );
+
+    await command(page, second, "second");
+    const queuedAt = performance.now();
+    const receivedAt = Date.now();
+    const leftoverBudgetMs = Math.max(0, 15_000 - (performance.now() - queuedAt));
+    const queueSamples: Array<{
+      atMs: number;
+      calls: number;
+      firstReceipt: boolean;
+      secondReceipt: boolean;
+    }> = [];
+    const queueDeadline = performance.now() + 2_000;
+    await expect
+      .poll(
+        async () => {
+          const calls = (await gateway.getRequests("chat.startup")).length;
+          const firstReceipt = Boolean(await result(page, "first"));
+          const secondReceipt = Boolean(await result(page, "second"));
+          queueSamples.push({
+            atMs: Math.round(performance.now() - queuedAt),
+            calls,
+            firstReceipt,
+            secondReceipt,
+          });
+          return { calls, firstReceipt, secondReceipt };
+        },
+        { timeout: Math.max(1, queueDeadline - performance.now()), interval: 50 },
+      )
+      .toStrictEqual({ calls: firstIndex + 1, firstReceipt: false, secondReceipt: false })
+      .then(() => {
+        console.log(
+          `[proof] ${variant.label} queue held ${Math.round(performance.now() - queuedAt)}ms across ${queueSamples.length} samples: no second router RPC, no first/second receipt`,
+        );
+      });
 
     const jump = await page.evaluate(() => {
-      const probe = (window as unknown as { __nativeConversationProof: Probe })
-        .__nativeConversationProof;
-      const perfBefore = performance.now();
-      probe.dateJumpMs = 60_000;
+      const state = Reflect.get(window, "__nativeConversationProof") as Probe;
+      const performanceBefore = performance.now();
+      const wallBefore = Date.now();
+      state.dateJumpMs = 60_000;
       return {
-        wallNow: Date.now(),
-        perfDelta: performance.now() - perfBefore,
+        wallDelta: Date.now() - wallBefore,
+        performanceDelta: performance.now() - performanceBefore,
       };
     });
     console.log(
-      `[proof] ${version} wall clock +60000ms observed Date.now=${jump.wallNow}; performance.now delta=${jump.perfDelta}ms`,
+      `[proof] ${variant.label} wall jump Date.now delta=${jump.wallDelta}ms performance.now delta=${jump.performanceDelta.toFixed(1)}ms`,
     );
+    expect(jump.wallDelta).toBe(60_000);
+    expect(jump.performanceDelta).toBeLessThan(500);
 
     await gateway.resolveDeferred("chat.startup");
     const secondRequest = await gateway.waitForRequest("chat.startup", {
-      after: callsBeforeSecond,
+      after: firstIndex + 1,
     });
+    expect(sessionKey(secondRequest.params)).toBe(second.sessionKey);
     console.log(
-      `[proof] ${version} router RPC #2 chat.startup params=${JSON.stringify(secondRequest.params)}`,
+      `[proof] ${variant.label} actual router RPC #${firstIndex + 2} chat.startup session=${sessionKey(secondRequest.params)}`,
     );
-    await expect.poll(() => result(page, "second"), { timeout: 5_000 }).toBeDefined();
-    const secondResult = await result(page, "second");
-    const finalRoute = await stateRoute(page, version);
+    const secondReceipt = await waitForResult(page, "second");
+    const receiptDelayMs = Math.round(performance.now() - queuedAt);
+    const wallElapsedMs = Math.round(Date.now() - receivedAt);
     console.log(
-      `[proof] ${version} receipt=${JSON.stringify(secondResult)} route=${JSON.stringify(finalRoute)}`,
+      `[proof] ${variant.label} second receipt=${JSON.stringify(secondReceipt)} receiptDelay=${receiptDelayMs}ms wallElapsed=${wallElapsedMs}ms`,
     );
-    expect(await result(page, "first")).toBeDefined();
-    return { version, result: secondResult, finalRoute };
+    const firstReceipt = await result(page, "first");
+    expect(firstReceipt).toBeDefined();
+    expect(secondReceipt).toMatchObject({ ok: variant.ok });
+    if (variant.error) {
+      expect(secondReceipt).toMatchObject({ error: variant.error });
+    }
+    if (variant.ok) {
+      expect(receiptDelayMs).toBeLessThanOrEqual(leftoverBudgetMs + 2_000);
+      await expect.poll(() => page.url(), { timeout: 20_000 }).toContain(second.sessionKey);
+      expect(new URL(page.url()).pathname).toContain(second.sessionKey);
+      console.log(`[proof] ${variant.label} final actual UI route=${new URL(page.url()).pathname}`);
+    }
+    console.log(
+      `VERDICT:${variant.label}:${variant.ok ? "SUCCEEDED" : "KILLED"}:${String(secondReceipt.error ?? "none")}`,
+    );
   } finally {
     await context.close();
     await browser.close();
@@ -185,11 +236,20 @@ async function mountCase(version: "post-fix" | "pre-fix") {
   }
 }
 
+const selectedVariant = process.env.PR182627_PROOF_VARIANT;
+
 it("PROOF: queued native navigation crosses the running Control UI router after a wall-clock jump", async () => {
-  const post = await mountCase("post-fix");
-  const pre = await mountCase("pre-fix");
-  expect(post.result).toMatchObject({ ok: true });
-  expect(pre.result).toMatchObject({ ok: false, error: "navigate-timeout" });
-  console.log(`VERDICT:post-fix=${JSON.stringify(post.result)}`);
-  console.log(`VERDICT:pre-fix=${JSON.stringify(pre.result)}`);
-}, 120_000);
+  const candidates: Array<Variant & { buildId: string }> = [
+    { label: "post-fix", ok: true, buildId: "native-running-postfix" },
+    { label: "pre-fix", ok: false, error: "navigate-timeout", buildId: "native-running-prefix" },
+  ];
+  const selected = selectedVariant
+    ? candidates.filter((candidate) => candidate.label === selectedVariant)
+    : candidates;
+  if (selected.length === 0) {
+    throw new Error(`Unknown PR182627_PROOF_VARIANT: ${selectedVariant}`);
+  }
+  for (const candidate of selected) {
+    await mountCase(candidate, candidate.buildId);
+  }
+}, 180_000);
