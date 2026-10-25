@@ -386,7 +386,20 @@ async function mountCase(variant: Variant, buildId: string) {
     console.log(
       `[proof] ${variant.label} first receipt=${JSON.stringify(firstReceipt)} router calls=${firstRouter.calls} route=${firstRouter.pathname}`,
     );
-    const secondReceipt = (await result(page, "second")) as Record<string, unknown> | undefined;
+    let secondReceipt: Record<string, unknown> | undefined;
+    if (variant.ok) {
+      await expect
+        .poll(
+          async () => {
+            secondReceipt = (await result(page, "second")) as Record<string, unknown> | undefined;
+            return secondReceipt;
+          },
+          { timeout: 10_000 },
+        )
+        .toBeDefined();
+    } else {
+      secondReceipt = (await result(page, "second")) as Record<string, unknown> | undefined;
+    }
     expect(secondReceipt).toBeDefined();
     const receiptDelayMs = Math.round(performance.now() - queuedAt);
     console.log(
@@ -399,27 +412,42 @@ async function mountCase(variant: Variant, buildId: string) {
     if (variant.ok) {
       await expect.poll(() => page.url(), { timeout: 5_000 }).toContain(second.sessionKey);
       await expect.poll(() => stateAfterResult(page, "second"), { timeout: 5_000 }).toEqual(second);
-      const final = await evaluateControlUiContext(page, (applicationContext) => {
+      const assertFinal = expect
+        .poll(
+          () =>
+            evaluateControlUiContext(page, (applicationContext) => {
+              const route = applicationContext.router.getState();
+              return {
+                calls: (Reflect.get(window, "__nativeConversationProof") as Probe)
+                  .routerNavigations,
+                pathname: route.location.pathname,
+                pendingMatches: route.pendingMatches.length,
+                matches: route.matches[0]?.status,
+                routeData: route.matches[0]?.data,
+              };
+            }),
+          { timeout: 10_000 },
+        )
+        .toMatchObject({
+          calls: 2,
+          pathname: "/chat/main/second",
+          pendingMatches: 0,
+          matches: "success",
+          routeData: { kind: "session", sessionKey: second.sessionKey, agentId: second.agentId },
+        });
+      await assertFinal;
+      const finalRoute = await evaluateControlUiContext(page, (applicationContext) => {
         const route = applicationContext.router.getState();
         return {
           calls: (Reflect.get(window, "__nativeConversationProof") as Probe).routerNavigations,
           pathname: route.location.pathname,
-          pendingMatches: route.pendingMatches.length,
-          matches: route.matches[0]?.status,
           routeData: route.matches[0]?.data,
         };
       });
-      expect(final).toMatchObject({
-        calls: 2,
-        pathname: "/chat/main/second",
-        pendingMatches: 0,
-        matches: "success",
-        routeData: { kind: "session", sessionKey: second.sessionKey, agentId: second.agentId },
-      });
-      expect(new URL(page.url()).pathname).toBe(final.pathname);
+      expect(new URL(page.url()).pathname).toBe(finalRoute.pathname);
       const state = await stateAfterResult(page, "second");
       console.log(
-        `[proof] ${variant.label} final actual UI route=${final.pathname} routerCalls=${final.calls} routeData=${JSON.stringify(final.routeData)} stateAfterReceipt=${JSON.stringify(state)}`,
+        `[proof] ${variant.label} final actual UI route=${finalRoute.pathname} routerCalls=${finalRoute.calls} routeData=${JSON.stringify(finalRoute.routeData)} stateAfterReceipt=${JSON.stringify(state)}`,
       );
     }
     console.log(
