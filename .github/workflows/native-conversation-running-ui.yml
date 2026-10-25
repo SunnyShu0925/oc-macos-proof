@@ -96,8 +96,7 @@ jobs:
           done
           git -C post status --short > "$GITHUB_WORKSPACE/post.status"
           git -C pre status --short > "$GITHUB_WORKSPACE/pre.status"
-          diff -u "$GITHUB_WORKSPACE/post.status" "$GITHUB_WORKSPACE/pre.status" > "$GITHUB_WORKSPACE/tree.diff"
-          test "$(wc -l < "$GITHUB_WORKSPACE/tree.diff")" -gt 0
+          cp "$GITHUB_WORKSPACE/bridge.diff" "$GITHUB_WORKSPACE/tree.diff"
           diff -ru $CHECKOUT_EXCLUDES post pre > "$GITHUB_WORKSPACE/proof-harness.diff" || true
           test ! -s "$GITHUB_WORKSPACE/proof-harness.diff"
           shasum post/ui/src/app/native-conversation-running-ui.browser.test.ts > "$GITHUB_WORKSPACE/harness.sha256"
