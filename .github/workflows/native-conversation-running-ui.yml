@@ -8,14 +8,14 @@ on:
         default: c7fb8202e193c22be02eee2ea280771d0d07f54f
       harness:
         required: true
-        default: proof/pr-182627-running-ui-router-settled
+        default: proof/pr-182627-running-ui-settled
 
 jobs:
   proof:
-    uses: SunnyShu0925/oc-macos-proof/.github/workflows/native-conversation-running-ui.yml@a4ca20adff25c5dd51a93567db3aa51e566ae25a
+    uses: SunnyShu0925/oc-macos-proof/.github/workflows/native-conversation-running-ui.yml@374f3f69fa030fcc72f256599acfe1da1b58d2ed
     with:
       head: ${{ inputs.head }}
-      harness: a4ca20adff25c5dd51a93567db3aa51e566ae25a
+      harness: 374f3f69fa030fcc72f256599acfe1da1b58d2ed
       native_repository: SunnyShu0925/openclaw
       native_ref: c7fb8202e193c22be02eee2ea280771d0d07f54f
     permissions:
