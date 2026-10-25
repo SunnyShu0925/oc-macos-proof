@@ -41,7 +41,11 @@ jobs:
           git -C openclaw fetch --depth 1 origin "$PR_REF"
           git -C openclaw checkout --detach FETCH_HEAD
           test "$(git -C openclaw rev-parse HEAD)" = "$PR_REF"
-          git -C openclaw show --format= --stat HEAD
+          if [[ "${{ matrix.version }}" == "parent" ]]; then
+            git -C openclaw show HEAD:ui/src/app/native-conversation-bridge.ts | grep -F 'Date.now() + RESPONSE_TIMEOUT_MS'
+          else
+            git -C openclaw show HEAD:ui/src/app/native-conversation-bridge.ts | grep -F 'performance.now() + RESPONSE_TIMEOUT_MS'
+          fi
 
       - name: Install production Host proof test
         run: |
@@ -76,7 +80,7 @@ jobs:
           which node
           node -v
           swift test --package-path apps/macos --filter PR182627ProductionHostTests 2>&1 | tee "/tmp/${{ matrix.version }}.log"
-          echo "PROOF_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+          exit "${PIPESTATUS[0]}"
 
       - name: Collect
         if: always()
@@ -89,37 +93,47 @@ jobs:
         env:
           PROOF_VERSION: ${{ matrix.version }}
           PRODUCTION_SHA: ${{ matrix.ref }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PROOF_RUN_ID: ${{ github.run_id }}
+          PROOF_SHA: ${{ github.sha }}
+          PROOF_REF: ${{ inputs.proof_ref }}
         run: |
           log="/tmp/$PROOF_VERSION.log"
           provenance=$(mktemp "/tmp/production-host-$PROOF_VERSION-provenance.XXXXXX.json")
-          gh api "repos/openclaw/openclaw/actions/runs/$GITHUB_RUN_ID" > "$provenance"
-          test "$(jq -r .head_sha "$provenance")" = "$PRODUCTION_SHA"
+          gh api "repos/$REPOSITORY/actions/runs/$PROOF_RUN_ID" > "$provenance"
+          test "$(jq -r .head_sha "$provenance")" = "$PROOF_SHA"
+          test "$PROOF_SHA" = "$PROOF_REF"
+          grep -F 'production page bridge error=none' "$log"
           grep -F '[PR182627Host] VERDICT:START' "$log"
-          grep -F '[PR182627Host] page={"phase":"ready"' "$log"
           if [[ "$PROOF_VERSION" == "parent" ]]; then
             test "$(grep -cF 'VERDICT:START' "$log")" -eq 1
-            grep -F 'first request=pr182627-first host=ok=true error=none' "$log"
-            grep -F 'second request=pr182627-second queued=true' "$log"
-            grep -F 'following request=pr182627-third queued=true' "$log"
+            grep -E 'first request=[0-9A-F-]+ host=ok=true error=none' "$log"
+            grep -E 'second request=[0-9A-F-]+ queued=true' "$log"
+            grep -F 'first page ack=ok=true error=none' "$log"
             grep -F 'first native ok=true error=none' "$log"
-            grep -F 'first bridge-result host=ok=true error=none' "$log"
-            grep -F 'following host=ok=true error=none native ok=true' "$log"
-            test "$(grep -cF 'VERDICT:FAILED:timeout' "$log")" -eq 1
+            grep -F 'first result host=ok=true error=none' "$log"
+            grep -F 'second started=false' "$log"
+            grep -F 'second native ok=false error=navigate-timeout' "$log"
+            grep -F 'page={"firstHost":true,"firstPage":true,"secondStatus":"queued"}' "$log"
+            test "$(grep -cF 'VERDICT:FAILED:navigate-timeout' "$log")" -eq 1
             test "$(grep -cF 'VERDICT:SUCCEEDED' "$log")" -eq 0
             test "$(grep -cF 'second host=' "$log")" -eq 0
+            test "$(grep -cF 'second page ack=' "$log")" -eq 0
           else
             test "$(grep -cF 'VERDICT:START' "$log")" -eq 1
-            grep -F 'first request=pr182627-first host=ok=true error=none' "$log"
-            grep -F 'second request=pr182627-second queued=true' "$log"
-            grep -F 'following request=pr182627-third queued=true' "$log"
+            grep -E 'first request=[0-9A-F-]+ host=ok=true error=none' "$log"
+            grep -E 'second request=[0-9A-F-]+ queued=true' "$log"
+            grep -F 'first page ack=ok=true error=none' "$log"
             grep -F 'first native ok=true error=none' "$log"
-            grep -F 'first bridge-result host=ok=true error=none' "$log"
-            grep -F 'following host=ok=true error=none native ok=true' "$log"
-            grep -F 'second navigate started after first host ack' "$log"
+            grep -F 'first result host=ok=true error=none' "$log"
+            grep -F 'second started=true' "$log"
             grep -F 'second host=ok=true error=none' "$log"
             grep -F 'second native ok=true error=none' "$log"
+            grep -F 'second page ack=ok=true error=none' "$log"
+            grep -F 'page={"firstHost":true,"firstPage":true,"secondStatus":"started"}' "$log"
             grep -E 'clock Date\.now delta=5[9-9][0-9]{3}ms|clock Date\.now delta=60[0-9]{3}ms' "$log"
-            test "$(grep -cF '"phase":"secondFinished","commands":3,"firstHost":true,"firstBridge":true' "$log")" -eq 1
+            grep -E 'clock performance\.now delta=[0-9]+ms' "$log"
             test "$(grep -cF 'VERDICT:SUCCEEDED' "$log")" -eq 1
             test "$(grep -cF 'VERDICT:FAILED:' "$log")" -eq 0
           fi

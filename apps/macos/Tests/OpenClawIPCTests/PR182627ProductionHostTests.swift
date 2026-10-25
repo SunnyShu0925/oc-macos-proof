@@ -30,8 +30,17 @@ struct PR182627ProductionHostTests {
         let bridge = NativeConversationBridge(document: document)
         handler.owner = bridge
         defer { bridge.close() }
-        bridge.load(server.url("/control/chat/main"))
+        bridge.load(server.url("/control/chat/main?pr182627-proof"))
         try await TestWait.observed("production bridge ready") { bridge.currentDocumentId != nil }
+        try await TestWait.observed("production page bridge") {
+            try await Self.evaluate(
+                "window.__PR182627_PROOF__ === true || typeof window.__PR182627_PROOF_ERROR__ === 'string'",
+                in: document.webView) as? Bool == true
+        }
+        let pageBridgeError = try await Self.evaluate(
+            "String(window.__PR182627_PROOF_ERROR__ ?? 'none')", in: document.webView)
+        Self.trace("production page bridge error=\(pageBridgeError as? String ?? "invalid")")
+        try #require(pageBridgeError as? String == "none")
 
         Self.trace("VERDICT:START")
         let first = Task { await bridge.request(.navigate(Self.firstContext)) }
@@ -39,12 +48,12 @@ struct PR182627ProductionHostTests {
         let firstHost = try await Self.waitForResult(
             in: document.webView, requestId: firstRequest, commandResult: false)
         Self.trace("first request=\(firstRequest) host=\(Self.ack(firstHost))")
-        let identity = try await Self.evaluate("window.fixtureReport()", in: document.webView)
-        Self.trace("page=\(identity ?? "invalid")")
 
         let second = Task { await bridge.request(.navigate(Self.secondContext)) }
         let secondRequest = try await Self.waitForCommand(in: document.webView, count: 2)
-        try await Self.waitForState(in: document.webView, "secondQueued")
+        let queuedStatus = try await Self.evaluate(
+            "window.fixturePageReport.secondStatus", in: document.webView)
+        Self.trace("second status=\(queuedStatus as? String ?? "invalid")")
         Self.trace("second request=\(secondRequest) queued=true")
         let queuedNow = try await Self.evaluate("Date.now()", in: document.webView)
         let queuedPerformance = try await Self.evaluate("performance.now()", in: document.webView)
@@ -65,48 +74,61 @@ struct PR182627ProductionHostTests {
         Self.trace("clock Date.now delta=\(Int(wallDelta.rounded()))ms")
         Self.trace("clock performance.now delta=\(Int(monotonicDelta.rounded()))ms")
 
-        // A second command waiting behind the first extends the queue without
-        // replacing its result. Its own real Host ACK proves the queue continued.
-        let following = Task { await bridge.request(.focusComposer) }
-        let followingRequest = try await Self.waitForCommand(in: document.webView, count: 3)
-        try await Self.run(
-            "const firstFinishedId=window.lastCommand.requestId;window.fixturePost({type:'command-result',requestId:firstFinishedId,ok:true});window.fixturePhase='firstFinished'",
-            in: document.webView)
+        // Finish the blocker through the real page-world command-result handshake.
+        let bridgePage = try await Self.run("""
+        return await window.fixtureFinishBridge(\(try Self.literal(firstRequest)));
+        """, in: document.webView)
+        let bridgePageAck = try #require(bridgePage as? [String: Any])
+        Self.trace("first bridge page ack=\(Self.ack(bridgePageAck))")
         let firstResult = await first.value
         Self.trace("first native ok=\(firstResult.ok) error=\(firstResult.error ?? "none")")
-        let firstBridgeHost = try await Self.waitForResult(
+        let firstReply = try await Self.waitForResult(
             in: document.webView, requestId: firstRequest, commandResult: true)
-        Self.trace("first bridge-result host=\(Self.ack(firstBridgeHost))")
-        let followingResult = await following.value
-        let followingHost = try await Self.waitForResult(
-            in: document.webView, requestId: followingRequest, commandResult: true)
-        Self.trace("following host=\(Self.ack(followingHost)) native ok=\(followingResult.ok)")
+        Self.trace("first result host=\(Self.ack(firstReply))")
 
-        let secondLiteral = try Self.literal(secondRequest)
-        let secondStartReply = try await Self.evaluate(
-            "window.fixtureReplies[\(secondLiteral)]?.host ?? null",
-            in: document.webView)
-        guard let secondStartReply = secondStartReply as? [String: Any],
-              secondStartReply["ok"] as? Bool == true
-        else {
-            Self.trace("VERDICT:FAILED:second-start-ack")
-            return
+        let firstPage = try await Self.run("""
+        return await window.fixtureStartNavigation();
+        """, in: document.webView)
+        let firstPageAck = try #require(firstPage as? [String: Any])
+        Self.trace("first page ack=\(Self.ack(firstPageAck))")
+        let secondStatus = try await Self.evaluate(
+            "window.fixturePageReport.secondStatus", in: document.webView)
+        let started = secondStatus as? String == "started"
+        Self.trace("second started=\(started)")
+        var secondHost: Any?
+        var secondPageAck: Any?
+        if started {
+            secondHost = try await Self.waitForResult(
+                in: document.webView, requestId: secondRequest, commandResult: false)
+            Self.trace("second host=\(Self.ack(secondHost))")
+            try await Self.waitForState(in: document.webView, "secondPending")
+            let pageReply = try await Self.run("""
+            return await window.fixtureFinishSecond(\(try Self.literal(secondRequest)));
+            """, in: document.webView)
+            secondPageAck = pageReply
+            Self.trace("second page ack=\(Self.ack(secondPageAck))")
         }
-        try await Self.waitForState(in: document.webView, "secondStarted")
-        Self.trace("second navigate started after first host ack")
-        try await Self.run(
-            "const secondFinishedId=window.lastCommand.requestId;window.fixturePhase='secondStarted';setTimeout(()=>{window.fixturePost({type:'command-result',requestId:secondFinishedId,ok:true});window.fixturePhase='secondFinished'},250)",
-            in: document.webView)
         let result = await second.value
-        let secondHost = try await Self.waitForResult(
-            in: document.webView, requestId: secondRequest, commandResult: true)
-        Self.trace("second host=\(Self.ack(secondHost))")
         Self.trace("second native ok=\(result.ok) error=\(result.error ?? "none")")
-        _ = try await Self.evaluate("window.restoreClock()", in: document.webView)
-        let page = try await Self.evaluate("window.fixtureReport()", in: document.webView)
-        Self.trace("page=\(page)")
+        let page = try await Self.evaluate(secondPageAck == nil
+            ? "JSON.stringify(window.fixturePageReport)"
+            : "JSON.stringify({...window.fixturePageReport, firstHost:window.fixtureReplies["
+                + "\(try Self.literal(firstRequest))].host.ok === true})", in: document.webView)
+        Self.trace("page=\(page as? String ?? "invalid")")
         Self.trace("VERDICT:\(result.ok ? "SUCCEEDED" : "FAILED:\(result.error ?? "none")")")
         #expect(wallDelta >= 59_900, "wall clock did not step by 60 seconds")
+        #expect(monotonicDelta < 5_000, "performance.now moved with the wall clock")
+        #expect(bridgePageAck["ok"] as? Bool == true,
+                "fixture command-result did not reach the native host")
+        #expect(firstHost is [String: Any], "page did not receive the first native ACK")
+        #expect(firstHost as? [String: Any] as? [String: Bool] == ["ok": true],
+                "first native ACK was rejected")
+        #expect(firstReply is [String: Any], "native command-result was not acknowledged")
+        #expect(firstPageAck["ok"] as? Bool == true, "first page acknowledgement was rejected")
+        #expect(queuedStatus as? String == "queued", "second navigation was not queued")
+        #expect(started, "second navigation did not begin after the first completed")
+        #expect((secondPageAck as? [String: Any])?["ok"] as? Bool == true,
+                "second page acknowledgement was rejected")
         #expect(result.ok)
     }
 
@@ -114,7 +136,6 @@ struct PR182627ProductionHostTests {
         agentId: "main", sessionKey: "agent:main:first")
     private static let secondContext = NativeConversationContext(
         agentId: "main", sessionKey: "agent:main:next")
-
     private static func trace(_ line: String) {
         print("[PR182627Host] \(line)")
     }
@@ -128,18 +149,27 @@ struct PR182627ProductionHostTests {
         try await webView.evaluateJavaScript(script)
     }
 
-    private static func run(_ script: String, in webView: WKWebView) async throws {
+    private static func run(_ script: String, in webView: WKWebView) async throws -> Any? {
         try await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page)
     }
 
-    private static func waitForCommand(in webView: WKWebView, count: Int) async throws -> String {
-        let key = "window.lastCommand?.requestId"
-        try await TestWait.state("command \(count)") {
-            guard let received = try? await self.evaluate("window.commandCount", in: webView) as? Int
-            else { return false }
-            return received >= count
+    private static func waitForCommand(
+        in webView: WKWebView,
+        count: Int? = nil,
+        requestId: String? = nil) async throws -> String
+    {
+        let target = requestId
+            .map { "Boolean(window.commands.some(command => command.requestId === \(try Self.literal($0))))" }
+            ?? "window.commandCount >= \(count ?? 0)"
+        try await TestWait.state("command \(requestId ?? String(count ?? 0))") {
+            let received = try? await self.evaluate(
+                target, in: webView) as? Bool
+            return received == true
         }
-        return try #require(try await self.evaluate(key, in: webView) as? String)
+        if let requestId { return requestId }
+        return try #require(try await self.evaluate(
+            "window.commands[\(try #require(count) - 1)].requestId",
+            in: webView) as? String)
     }
 
     private static func waitForState(in webView: WKWebView, _ state: String) async throws {
@@ -154,16 +184,16 @@ struct PR182627ProductionHostTests {
         commandResult: Bool) async throws -> Any?
     {
         let literal = try Self.literal(requestId)
-        try await TestWait.state(commandResult ? "bridge result \(requestId)" : "result ACK \(requestId)") {
+        try await TestWait.state(commandResult ? "native result \(requestId)" : "result ACK \(requestId)") {
             guard let replies = try? await self.evaluate(
                 "window.fixtureReplies[\(literal)]", in: webView) as? [String: Any],
-                let value = replies[commandResult ? "bridge" : "host"] as? [String: Any]
+                let value = replies[commandResult ? "native" : "host"] as? [String: Any]
             else { return false }
             return value["ok"] as? Bool == true || value["error"] as? String != nil
         }
         let replies = try #require(
             try await self.evaluate("window.fixtureReplies[\(literal)]", in: webView) as? [String: Any])
-        return replies[commandResult ? "bridge" : "host"]
+        return replies[commandResult ? "native" : "host"]
     }
 
     private static func literal(_ value: String) throws -> String {
@@ -177,11 +207,12 @@ struct PR182627ProductionHostTests {
     });
     const documentId = __OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__.documentId;
     const conversation = window.webkit.messageHandlers.openclawConversation;
-    window.fixtureReplies = {};
-    window.fixturePhase = 'ready';
     window.commandCount = 0;
-    window.lastCommand = null;
-    window.fixturePost = body => conversation.postMessage({contract:1, documentId, ...body});
+    window.commands = [];
+    window.fixtureReplies = {};
+    window.fixturePageReport = {firstHost:false, firstPage:false, secondStatus:'queued'};
+    const post = body => conversation.postMessage({contract:1, documentId, ...body});
+    window.fixturePost = post;
     const remember = (kind, requestId, reply) => {
       window.fixtureReplies[requestId] ??= {};
       window.fixtureReplies[requestId][kind] = reply;
@@ -189,28 +220,89 @@ struct PR182627ProductionHostTests {
     window.addEventListener('openclaw:native-conversation-command', event => {
       const command = event.detail;
       window.commandCount++;
-      window.lastCommand = command;
-      if (window.commandCount === 1) {
-        remember('host', command.requestId, {ok:true});
+      window.commands.push(command);
+      if (window.commandCount === 2) {
+        window.fixturePageReport.secondStatus = 'queued';
+        window.fixturePhase = 'secondQueued';
       }
-      if (window.commandCount === 2) window.fixturePhase = 'secondQueued';
     });
     const realNow = Date.now;
     window.stepWallClock = () => {
       Date.now = () => realNow() + 60000;
       window.fixturePhase = 'clockStepped';
     };
-    window.restoreClock = () => { Date.now = realNow; };
-    window.fixtureReport = () => JSON.stringify({
-      phase:window.fixturePhase, commands:window.commandCount,
-      firstHost:window.fixtureReplies[firstRequest]?.host?.ok === true,
-      firstBridge:window.fixtureReplies[firstRequest]?.bridge?.ok === true
+    const pendingNavigations = [];
+    const navigate = options => new Promise(resolve => {
+      pendingNavigations.push({options, resolve});
     });
-    var firstRequest;
-    fixturePost({type:'ready',surface:'conversation',capabilities:[]});
-    window.addEventListener('openclaw:native-conversation-command', event => {
-      if (window.commandCount === 1) firstRequest = event.detail.requestId;
-    });
+    window.fixtureStartNavigation = async () => {
+      const navigation = pendingNavigations[0];
+      const reply = await post({type:'command-result', requestId:window.commands[0].requestId, ok:true});
+      window.fixturePageReport.firstPage = reply.ok === true;
+      navigation.resolve();
+      window.fixtureConversation = {
+        agentId:navigation.options.agentId, sessionKey:navigation.options.sessionKey
+      };
+      return reply;
+    };
+    window.fixtureFinishBridge = async requestId => {
+      const reply = await post({type:'command-result', requestId, ok:true});
+      remember('native', requestId, reply);
+      return reply;
+    };
+    window.fixtureFinishSecond = async () => {
+      const navigation = pendingNavigations[0];
+      const reply = await post({type:'command-result', requestId:window.commands[1].requestId, ok:true});
+      window.fixturePhase = 'secondPending';
+      navigation.resolve();
+      window.fixtureConversation = {
+        agentId:navigation.options.agentId, sessionKey:navigation.options.sessionKey
+      };
+      return reply;
+    };
+    post({type:'ready',surface:'conversation',capabilities:[]});
+    if (location.search.includes('pr182627-proof')) {
+      const bridge = {
+        agents: {
+          state: { agentsList: [{ id:'main', name:'Main' }] }
+        },
+        gateway: {
+          snapshot: { phase:'connected', hello:null, assistantAgentId:'main' }
+        },
+        sessions: {
+          presentation: { agentId:'main', result:null },
+          isRunVisuallyActive: () => false,
+          subscribe: () => () => {}
+        },
+        router: {
+          getState: () => ({
+            get matches() {
+              const sessionKey = window.fixtureConversation?.sessionKey;
+              return [{
+                routeId:'chat',
+                status:sessionKey ? 'success' : 'pending',
+                data:sessionKey ? {kind:'session',agentId:'main',sessionKey} : null
+              }];
+            },
+            pendingMatches:[]
+          })
+        },
+        navigateAndWait: async (_routeId, options) => {
+          if (pendingNavigations.length === 1) window.fixturePageReport.secondStatus = 'started';
+          return navigate(options);
+        }
+      };
+      window.fixtureNativeBridge = bridge;
+      import('/src/app/native-conversation-bridge.ts?pr182627-proof')
+        .then(({createNativeConversationBridge}) => {
+          const nativeBridge = createNativeConversationBridge(bridge);
+          if (!nativeBridge) throw new Error('production native bridge was not created');
+          window.__PR182627_PROOF__ = true;
+        })
+        .catch(error => {
+          window.__PR182627_PROOF_ERROR__ = String(error);
+        });
+    }
     </script></body></html>
     """
 }
