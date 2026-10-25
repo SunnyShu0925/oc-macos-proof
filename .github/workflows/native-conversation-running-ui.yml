@@ -55,13 +55,13 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm --dir ui exec playwright install webkit
       - name: Prepare exact pre-fix checkout
+        working-directory: ${{ github.workspace }}
         run: |
-          trap 'echo "prepare exited: code=$?" >&2' EXIT
           test "$(git -C post rev-parse HEAD)" = "$PR182627_HEAD"
           test "$(git -C pre rev-parse HEAD)" = "$PR182627_HEAD"
           harness_head=$(git -C harness rev-parse HEAD)
           harness_input_head=$(git -C harness rev-parse "$PR182627_HARNESS^{commit}")
-          echo "harness head=$harness_head input=$PR182627_HARNESS input_head=$harness_input_head" >&2
+          echo "harness head=$harness_head input=$PR182627_HARNESS input_head=$harness_input_head"
           test "$harness_head" = "$harness_input_head"
           file=ui/src/app/native-conversation-bridge.ts
           test_file=ui/src/app/native-conversation-running-ui.browser.test.ts
@@ -102,20 +102,20 @@ jobs:
           for path in "$file" "$test_file" "$config_file"; do
             for checkout in post pre; do
               if test -z "$(git -C "$checkout" status --short -- "$path")"; then
-                echo "Expected proof change missing: $checkout/$path" >&2
+                echo "Expected proof change missing: $checkout/$path"
                 status_ok=0
               fi
               if test "$(git -C "$checkout" diff --numstat -- "$path" |
                 wc -l)" -ne 1; then
-                echo "Unexpected tracked changes: $checkout/$path" >&2
+                echo "Unexpected tracked changes: $checkout/$path"
                 status_ok=0
               fi
             done
           done
           if test "$status_ok" -ne 1; then
-            echo "Proof checkouts do not match the intended patch." >&2
-            cat "$GITHUB_WORKSPACE/post.status" >&2
-            cat "$GITHUB_WORKSPACE/pre.status" >&2
+            echo "Proof checkouts do not match the intended patch."
+            cat "$GITHUB_WORKSPACE/post.status"
+            cat "$GITHUB_WORKSPACE/pre.status"
             exit 1
           fi
           cp "$GITHUB_WORKSPACE/bridge.diff" "$GITHUB_WORKSPACE/tree.diff"
@@ -126,14 +126,14 @@ jobs:
             diff -u "post/$path" "pre/$path" >> "$GITHUB_WORKSPACE/proof-harness.diff"
             comparison_status=$?
             set -e
-            echo "proof comparison $path: exit=$comparison_status" >&2
+            echo "proof comparison $path: exit=$comparison_status"
             if test "$comparison_status" -ne 0; then
               comparison_ok=0
             fi
           done
           if test "$comparison_ok" -ne 1; then
-            echo "Proof harness checkouts differ from each other:" >&2
-            cat "$GITHUB_WORKSPACE/proof-harness.diff" >&2
+            echo "Proof harness checkouts differ from each other:"
+            cat "$GITHUB_WORKSPACE/proof-harness.diff"
             exit 1
           fi
           shasum post/ui/src/app/native-conversation-running-ui.browser.test.ts > "$GITHUB_WORKSPACE/harness.sha256"
