@@ -59,8 +59,6 @@ jobs:
           test "$(git -C post rev-parse HEAD)" = "$PR182627_HEAD"
           test "$(git -C pre rev-parse HEAD)" = "$PR182627_HEAD"
           test "$(git -C harness rev-parse HEAD)" = "$PR182627_HARNESS"
-          test -z "$(git -C post status --porcelain)"
-          test -z "$(git -C pre status --porcelain)"
           file=ui/src/app/native-conversation-bridge.ts
           for checkout in post pre; do
             test -f "$checkout/$file"
@@ -94,8 +92,26 @@ jobs:
           done
           git -C post status --short > "$GITHUB_WORKSPACE/post.status"
           git -C pre status --short > "$GITHUB_WORKSPACE/pre.status"
+          status_ok=1
+          for path in \
+            "ui/src/app/native-conversation-bridge.ts" \
+            "ui/src/app/native-conversation-running-ui.browser.test.ts" \
+            "ui/vitest.config.ts"; do
+            if test -z "$(git -C post status --short -- "$path")" ||
+              test -z "$(git -C pre status --short -- "$path")"; then
+              echo "Expected proof change missing: $path" >&2
+              status_ok=0
+            fi
+          done
+          if test "$status_ok" -ne 1; then
+            echo "Proof checkouts do not match the intended patch." >&2
+            cat "$GITHUB_WORKSPACE/post.status" >&2
+            cat "$GITHUB_WORKSPACE/pre.status" >&2
+            exit 1
+          fi
           cp "$GITHUB_WORKSPACE/bridge.diff" "$GITHUB_WORKSPACE/tree.diff"
           : > "$GITHUB_WORKSPACE/proof-harness.diff"
+          comparison_ok=1
           for path in \
             "ui/src/app/native-conversation-running-ui.browser.test.ts" \
             "ui/vitest.config.ts"; do
@@ -103,11 +119,16 @@ jobs:
             diff -u "post/$path" "pre/$path" >> "$GITHUB_WORKSPACE/proof-harness.diff"
             comparison_status=$?
             set -e
-            if test "$comparison_status" -gt 1; then
-              exit 1
+            echo "proof comparison $path: exit=$comparison_status" >&2
+            if test "$comparison_status" -ne 0; then
+              comparison_ok=0
             fi
           done
-          test ! -s "$GITHUB_WORKSPACE/proof-harness.diff"
+          if test "$comparison_ok" -ne 1; then
+            echo "Proof harness checkouts differ from each other:" >&2
+            cat "$GITHUB_WORKSPACE/proof-harness.diff" >&2
+            exit 1
+          fi
           shasum post/ui/src/app/native-conversation-running-ui.browser.test.ts > "$GITHUB_WORKSPACE/harness.sha256"
           cat "$GITHUB_WORKSPACE/bridge.diff"
           cat "$GITHUB_WORKSPACE/tree.diff"
