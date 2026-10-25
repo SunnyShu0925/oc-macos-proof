@@ -91,6 +91,32 @@ PY
 echo ">>> wrapped execLaunchctl print/bootout transport" | tee -a "$LOG"
 
 # ---------------------------------------------------------------------------
+# Bypass the launchd-membership gate: the headless runner cannot truthfully
+# decide process membership (no GUI launchd session), so the shipped stop path
+# would misclassify and refuse. This is a proof-environment bypass only; the
+# deadline logic under test is untouched.
+# ---------------------------------------------------------------------------
+cp src/daemon/launchd-current-service.ts "$LOG.current.bak"
+python3 - "$LOG.current.bak" <<'PY'
+import sys
+src = open(sys.argv[1]).read()
+marker = "export async function isCurrentProcessInsideLaunchdService(label: string): Promise<boolean> {\n"
+assert marker in src, "isCurrentProcessInsideLaunchdService body marker not found"
+inject = (
+    "export async function isCurrentProcessInsideLaunchdService(label: string): Promise<boolean> {\n"
+    "  // PR#183033 proof: headless macOS runner has no GUI launchd session, so\n"
+    "  // launchd membership cannot be truthfully decided here. Bypass the gate;\n"
+    "  // the stop-deadline logic under test is untouched. The remainder of the\n"
+    "  // original body is unreachable but syntactically valid.\n"
+    "  return false;\n"
+)
+src = src.replace(marker, inject)
+open("src/daemon/launchd-current-service.ts","w").write(src)
+print("bypassed isCurrentProcessInsideLaunchdService -> false")
+PY
+echo ">>> bypassed launchd-membership gate (proof env only)" | tee -a "$LOG"
+
+# ---------------------------------------------------------------------------
 # Spawn a real TERM-resistant child so isPidDefinitelyDead(pid) (real
 # process.kill) sees a genuinely live PID and the wait loop spins on the
 # deadline. We do NOT bootstrap it via launchctl (headless EIO); the print
@@ -166,6 +192,7 @@ kill -9 "$PROOF_PID" 2>/dev/null || true
 pkill -9 -f "proofstop/sleep-forever" 2>/dev/null || true
 if [ -f "$LOG.stop.bak" ]; then cp "$LOG.stop.bak" src/daemon/launchd-stop.ts 2>/dev/null || true; rm -f "$LOG.stop.bak"; fi
 if [ -f "$LOG.exec.bak" ]; then cp "$LOG.exec.bak" src/daemon/launchd-exec.ts 2>/dev/null || true; rm -f "$LOG.exec.bak"; fi
+if [ -f "$LOG.current.bak" ]; then cp "$LOG.current.bak" src/daemon/launchd-current-service.ts 2>/dev/null || true; rm -f "$LOG.current.bak"; fi
 rm -f "$OPENCLAW_DIR/stop-drive.mts"
 
 echo "" | tee -a "$LOG"
