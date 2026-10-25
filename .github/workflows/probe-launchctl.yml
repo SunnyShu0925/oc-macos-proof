@@ -1,0 +1,37 @@
+name: Probe launchctl gui session
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: macos-14
+    steps:
+      - name: Probe launchctl gui domain
+        run: |
+          set -x
+          id -u
+          UIDNUM=$(id -u)
+          echo "UIDNUM=$UIDNUM"
+          launchctl print "gui/$UIDNUM" 2>&1 | head -5
+          mkdir -p "$HOME/Library/LaunchAgents"
+          cat > "$HOME/Library/LaunchAgents/com.openclaw.probe.launchctl.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>Label</key><string>com.openclaw.probe.launchctl</string>
+            <key>ProgramArguments</key><array><string>/bin/sleep</string><string>120</string></array>
+            <key>RunAtLoad</key><false/>
+          </dict>
+          </plist>
+          PLIST
+          launchctl bootstrap "gui/$UIDNUM" "$HOME/Library/LaunchAgents/com.openclaw.probe.launchctl.plist" 2>&1
+          echo "bootstrap exit=$?"
+          launchctl print "gui/$UIDNUM/com.openclaw.probe.launchctl" 2>&1 | head -25
+          launchctl kickstart "gui/$UIDNUM/com.openclaw.probe.launchctl" 2>&1
+          echo "kickstart exit=$?"
+          sleep 2
+          pgrep -fl "sleep 120" || echo "NO_SLEEP_PROCESS"
+          launchctl bootout "gui/$UIDNUM/com.openclaw.probe.launchctl" 2>&1
+          echo "bootout exit=$?"
+          sleep 1
+          pgrep -fl "sleep 120" || echo "NO_SLEEP_AFTER_BOOTOUT"
