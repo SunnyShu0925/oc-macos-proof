@@ -12,7 +12,7 @@ on:
 
 jobs:
   proof:
-    uses: SunnyShu0925/oc-macos-proof/.github/workflows/native-conversation-running-ui.yml@49c571c80d36bda424e24a3634699c5d01f15799
+    uses: SunnyShu0925/oc-macos-proof/.github/workflows/native-conversation-running-ui.yml@398a506e3d0f42295cadd10ea478ea68e294ba42
     with:
       head: ${{ inputs.head }}
       harness: ${{ inputs.harness }}
