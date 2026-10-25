@@ -122,18 +122,29 @@ jobs:
             > "$GITHUB_WORKSPACE/pre.status"
           echo 'pre status ready'
           status_ok=1
-          for path in "$file" "$config_file"; do
-            for checkout in post pre; do
-              if test -z "$(git -C "$checkout" status --short -- "$path")"; then
-                echo "Expected proof change missing: $checkout/$path"
-                status_ok=0
-              fi
-              if test "$(git -C "$checkout" diff --numstat -- "$path" |
-                wc -l)" -ne 1; then
-                echo "Unexpected tracked changes: $checkout/$path"
-                status_ok=0
-              fi
-            done
+          if test -n "$(git -C post status --short -- "$file")"; then
+            echo "Unexpected post-fix bridge change: post/$file"
+            status_ok=0
+          fi
+          if test "$(git -C pre status --short -- "$file")" != " M $file"; then
+            echo "Expected parent bridge change: pre/$file"
+            status_ok=0
+          fi
+          if test "$(git -C pre diff --numstat -- "$file" | wc -l)" -ne 1; then
+            echo "Unexpected parent bridge changes: pre/$file"
+            status_ok=0
+          fi
+          for checkout in post pre; do
+            if test "$(git -C "$checkout" status --short -- "$config_file")" != \
+              " M $config_file"; then
+              echo "Expected proof configuration change: $checkout/$config_file"
+              status_ok=0
+            fi
+            if test "$(git -C "$checkout" diff --numstat -- "$config_file" |
+              wc -l)" -ne 1; then
+              echo "Unexpected tracked changes: $checkout/$config_file"
+              status_ok=0
+            fi
           done
           for checkout in post pre; do
             if ! git -C "$checkout" status --short -- "$test_file" |
