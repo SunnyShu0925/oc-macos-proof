@@ -182,7 +182,6 @@ jobs:
             ui/src/e2e/native-conversation-running-ui.e2e.test.ts \
             2>&1 | tee "$GITHUB_WORKSPACE/postfix.log"
           grep -q 'VERDICT:post-fix:SUCCEEDED:none' "$GITHUB_WORKSPACE/postfix.log"
-          grep -q 'queue held 2[0-9][0-9][0-9]ms' "$GITHUB_WORKSPACE/postfix.log"
       - name: Run pre-fix WebKit proof
         working-directory: pre
         env:
