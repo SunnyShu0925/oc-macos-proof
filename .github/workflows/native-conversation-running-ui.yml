@@ -66,12 +66,21 @@ jobs:
           file=ui/src/app/native-conversation-bridge.ts
           test_file=ui/src/app/native-conversation-running-ui.browser.test.ts
           config_file=ui/vitest.config.ts
-          for checkout in post pre; do
-            test -f "$checkout/$file"
-            test -f "$checkout/ui/test-helpers/control-ui-e2e.ts"
-            test -f "$checkout/ui/vitest.config.ts"
-          test -d "$checkout/apps/macos/Tests/OpenClawIPCTests"
+          for path in "$file" ui/test-helpers/control-ui-e2e.ts "$config_file"; do
+            for checkout in post pre; do
+              if ! test -f "$checkout/$path"; then
+                echo "Missing proof file: $checkout/$path" >&2
+                exit 1
+              fi
+            done
           done
+          for checkout in post pre; do
+            if ! test -d "$checkout/apps/macos/Tests/OpenClawIPCTests"; then
+              echo "Missing proof directory: $checkout/apps/macos/Tests/OpenClawIPCTests" >&2
+              exit 1
+            fi
+          done
+          echo 'proof paths ready'
           git -C post show "$PR182627_HEAD^:$file" > pre/"$file"
           echo 'pre-file ready'
           grep -q 'deadline = performance.now()' post/$file
