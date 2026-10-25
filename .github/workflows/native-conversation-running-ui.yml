@@ -9,7 +9,10 @@ on:
       harness:
         required: true
         type: string
-      native_head:
+      native_repository:
+        required: true
+        type: string
+      native_ref:
         required: true
         type: string
 
@@ -23,7 +26,8 @@ jobs:
       CI: "true"
       PR182627_HEAD: ${{ inputs.head }}
       PR182627_HARNESS: ${{ inputs.harness }}
-      PR182627_NATIVE_HEAD: ${{ inputs.native_head }}
+      PR182627_NATIVE_REPOSITORY: ${{ inputs.native_repository }}
+      PR182627_NATIVE_REF: ${{ inputs.native_ref }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,6 +49,14 @@ jobs:
           repository: SunnyShu0925/oc-macos-proof
           ref: ${{ env.PR182627_HARNESS }}
           path: harness
+          persist-credentials: false
+      - name: Checkout exact PR head for native XCTest
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PR182627_NATIVE_REPOSITORY }}
+          ref: ${{ env.PR182627_NATIVE_REF }}
+          path: native
+          fetch-depth: 2
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -157,6 +169,13 @@ jobs:
           corepack enable
           pnpm install --frozen-lockfile
           pnpm --dir ui exec playwright install webkit
+      - name: Install native XCTest checkout
+        working-directory: native
+        run: |
+          test "$(git rev-parse HEAD)" = "$PR182627_NATIVE_REF"
+          test "$(git rev-parse HEAD^{tree})" = "$(git -C ../post rev-parse HEAD^{tree})"
+          corepack enable
+          pnpm install --frozen-lockfile
       - name: Production Control UI and WebKit environment
         working-directory: post
         run: |
@@ -204,7 +223,6 @@ jobs:
           test "$(git rev-parse HEAD)" = "$PR182627_NATIVE_HEAD"
           swift --version
           xcodebuild -version
-          node scripts/prepare-apple-mermaid.mjs
           set -o pipefail
           swift test --package-path "$SWIFT_TEST_PACKAGE" --filter NativeConversationBridgeTests \
             2>&1 | tee "$GITHUB_WORKSPACE/native-xctest.log"
@@ -216,6 +234,7 @@ jobs:
             echo "PR_HEAD=$(git -C post rev-parse HEAD)"
             echo "PR_PARENT=$(git -C pre rev-parse HEAD^)"
             echo "HARNESS_HEAD=$(git -C harness rev-parse HEAD)"
+            echo "NATIVE_HEAD=$(git -C native rev-parse HEAD)"
             echo "RUNNER_OS=$RUNNER_OS RUNNER_IMAGE=$ImageOS RUNNER_ARCH=$RUNNER_ARCH"
             echo "POST_GREP:"
             grep -E '\[proof\]|VERDICT|Tests ' postfix.log || true
