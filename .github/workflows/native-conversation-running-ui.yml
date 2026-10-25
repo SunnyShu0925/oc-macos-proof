@@ -12,10 +12,10 @@ on:
 
 jobs:
   proof:
-    uses: SunnyShu0925/oc-macos-proof/.github/workflows/native-conversation-running-ui.yml@23a9147dd80151b7095762215fc6743802267407
+    uses: SunnyShu0925/oc-macos-proof/.github/workflows/native-conversation-running-ui.yml@10def0863aac5ed6c52f53d91070e1c5c030febe
     with:
       head: ${{ inputs.head }}
-      harness: 23a9147dd80151b7095762215fc6743802267407
+      harness: 10def0863aac5ed6c52f53d91070e1c5c030febe
       native_head: e6d349448aaab22d995479f2e7a7c9f8abe06a1a
     permissions:
       contents: read
