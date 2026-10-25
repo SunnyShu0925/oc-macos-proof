@@ -179,6 +179,10 @@ const elapsed = Math.round(performance.now() - t0);
 console.log(`VERDICT[${VARIANT}] wall_jump=+${WALL_JUMP_MS}ms observe=${OBSERVE_MS}ms elapsed=${elapsed}ms outcome=${outcome}`);
 console.log("--- stopLaunchAgent stdout ---");
 console.log(output.join(""));
+
+// stopLaunchAgent may hold a pending setTimeout inside its 340s wait loop; exit
+// explicitly so the runner step does not hang on that open timer handle.
+process.exit(0);
 TS
 
 WALL_JUMP_MS="$WALL_JUMP_MS" VARIANT="$VARIANT" OBSERVE_MS="$OBSERVE_MS" PROOF_PID="$PROOF_PID" \
