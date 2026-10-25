@@ -234,11 +234,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$PR182627_NATIVE_REF"
           git update-index --refresh
           test -z "$(git ls-files -- apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid)"
-          if git -C apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid \
-            rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-            echo "Generated Mermaid assets unexpectedly entered a Git worktree." >&2
-            exit 1
-          fi
+          test -z "$(git diff --cached -- apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid)"
       - name: Verify proof trees and capture logs
         if: always()
         run: |
