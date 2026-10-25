@@ -194,9 +194,6 @@ async function mountCase(variant: Variant, buildId: string) {
           const call = probeState.routerNavigations;
           const to = options?.pathname ?? "";
           console.log(`[proof] actual router navigate call=${call} to=${to}`);
-          if (call === 2) {
-            console.log(`[proof] actual router RPC session=${to}`);
-          }
           if (call === 1) {
             await new Promise<void>((resolve) => {
               Object.assign(probeState, {

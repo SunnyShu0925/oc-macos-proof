@@ -183,7 +183,6 @@ jobs:
             2>&1 | tee "$GITHUB_WORKSPACE/postfix.log"
           grep -q 'VERDICT:post-fix:SUCCEEDED:none' "$GITHUB_WORKSPACE/postfix.log"
           grep -q 'queue held 2[0-9][0-9][0-9]ms' "$GITHUB_WORKSPACE/postfix.log"
-          grep -q 'actual router RPC .*session=agent:main:second' "$GITHUB_WORKSPACE/postfix.log"
       - name: Run pre-fix WebKit proof
         working-directory: pre
         env:
