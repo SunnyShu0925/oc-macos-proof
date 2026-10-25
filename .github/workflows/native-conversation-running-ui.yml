@@ -20,6 +20,7 @@ jobs:
     permissions:
       contents: read
     env:
+      CI: "true"
       PR182627_HEAD: ${{ inputs.head }}
       PR182627_HARNESS: ${{ inputs.harness }}
       PR182627_NATIVE_HEAD: ${{ inputs.native_head }}
@@ -64,10 +65,9 @@ jobs:
           echo "harness head=$harness_head input=$PR182627_HARNESS input_head=$harness_input_head"
           test "$harness_head" = "$harness_input_head"
           file=ui/src/app/native-conversation-bridge.ts
-          test_file=ui/src/app/native-conversation-running-ui.browser.test.ts
-          config_file=ui/vitest.config.ts
+          test_file=ui/src/e2e/native-conversation-running-ui.e2e.test.ts
           for path in "$file" ui/src/test-helpers/control-ui-e2e.ts \
-            ui/src/app/native-conversation-bridge.test.ts "$config_file"; do
+            ui/src/app/native-conversation-bridge.test.ts; do
             for checkout in post pre; do
               if ! test -f "$checkout/$path"; then
                 echo "Missing proof file: $checkout/$path" >&2
@@ -90,6 +90,8 @@ jobs:
           echo 'pre deadline ready'
           diff -u post/$file pre/$file > "$GITHUB_WORKSPACE/bridge.diff" || true
           echo 'bridge diff ready'
+          test "$(git -C post status --short -- "$file" "$test_file" | wc -l)" -eq 1
+          test "$(git -C pre status --short -- "$file" "$test_file" | wc -l)" -eq 2
           cp harness/.github/workflows/native-conversation-running-ui.browser.test.ts \
             "post/$test_file"
           test -f "post/$test_file"
@@ -98,29 +100,11 @@ jobs:
             "pre/$test_file"
           test -f "pre/$test_file"
           echo 'pre test ready'
-          for checkout in post pre; do
-            node -e '
-              const fs = require("fs");
-              const file = process.argv[1];
-              const source = fs.readFileSync(file, "utf8");
-              const marker = "const webkitTestFiles = [";
-              const entry = "\n  \"src/app/native-conversation-running-ui.browser.test.ts\",";
-              if (!source.includes(entry.trim())) {
-                if (source.split(marker).length !== 2) {
-                  throw new Error("WebKit test registry marker missing or ambiguous");
-                }
-                fs.writeFileSync(file, source.replace(marker, marker + entry));
-              }
-            ' \
-            "$checkout/$config_file"
-            echo "config ready $checkout"
-          done
-          git -C post status --short -- "$file" "$test_file" "$config_file" \
+          git -C post status --short -- "$file" "$test_file" \
             > "$GITHUB_WORKSPACE/post.status"
-          echo 'post status ready'
-          git -C pre status --short -- "$file" "$test_file" "$config_file" \
+          git -C pre status --short -- "$file" "$test_file" \
             > "$GITHUB_WORKSPACE/pre.status"
-          echo 'pre status ready'
+          echo 'status ready'
           status_ok=1
           if test -n "$(git -C post status --short -- "$file")"; then
             echo "Unexpected post-fix bridge change: post/$file"
@@ -134,18 +118,6 @@ jobs:
             echo "Unexpected parent bridge changes: pre/$file"
             status_ok=0
           fi
-          for checkout in post pre; do
-            if test "$(git -C "$checkout" status --short -- "$config_file")" != \
-              " M $config_file"; then
-              echo "Expected proof configuration change: $checkout/$config_file"
-              status_ok=0
-            fi
-            if test "$(git -C "$checkout" diff --numstat -- "$config_file" |
-              wc -l)" -ne 1; then
-              echo "Unexpected tracked changes: $checkout/$config_file"
-              status_ok=0
-            fi
-          done
           for checkout in post pre; do
             if ! git -C "$checkout" status --short -- "$test_file" |
               grep -qx '?? '"$test_file"; then
@@ -162,7 +134,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/bridge.diff" "$GITHUB_WORKSPACE/tree.diff"
           : > "$GITHUB_WORKSPACE/proof-harness.diff"
           comparison_ok=1
-          for path in "$test_file" "$config_file"; do
+          for path in "$test_file"; do
             set +e
             diff -u "post/$path" "pre/$path" >> "$GITHUB_WORKSPACE/proof-harness.diff"
             comparison_status=$?
@@ -177,7 +149,8 @@ jobs:
             cat "$GITHUB_WORKSPACE/proof-harness.diff"
             exit 1
           fi
-          shasum post/ui/src/app/native-conversation-running-ui.browser.test.ts > "$GITHUB_WORKSPACE/harness.sha256"
+          shasum "post/$test_file" harness/.github/workflows/native-conversation-running-ui.browser.test.ts \
+            > "$GITHUB_WORKSPACE/harness.sha256"
           cat "$GITHUB_WORKSPACE/bridge.diff"
           cat "$GITHUB_WORKSPACE/tree.diff"
       - name: Install pre-fix dependencies
@@ -201,12 +174,14 @@ jobs:
       - name: Run post-fix WebKit proof
         working-directory: post
         env:
-          OPENCLAW_UI_WEBKIT: "1"
           PR182627_PROOF_VARIANT: post-fix
         run: |
           set -o pipefail
-          pnpm --dir ui exec vitest run --config vitest.config.ts --project=webkit \
-            --maxWorkers=1 src/app/native-conversation-running-ui.browser.test.ts \
+          node scripts/run-vitest.mjs run \
+            --config test/vitest/vitest.ui-e2e.config.ts \
+            --configLoader runner \
+            --maxWorkers=1 \
+            ui/src/e2e/native-conversation-running-ui.e2e.test.ts \
             2>&1 | tee "$GITHUB_WORKSPACE/postfix.log"
           grep -q 'VERDICT:post-fix:SUCCEEDED:none' "$GITHUB_WORKSPACE/postfix.log"
           grep -q 'queue held 2[0-9][0-9][0-9]ms' "$GITHUB_WORKSPACE/postfix.log"
@@ -214,12 +189,14 @@ jobs:
       - name: Run pre-fix WebKit proof
         working-directory: pre
         env:
-          OPENCLAW_UI_WEBKIT: "1"
           PR182627_PROOF_VARIANT: pre-fix
         run: |
           set -o pipefail
-          pnpm --dir ui exec vitest run --config vitest.config.ts --project=webkit \
-            --maxWorkers=1 src/app/native-conversation-running-ui.browser.test.ts \
+          node scripts/run-vitest.mjs run \
+            --config test/vitest/vitest.ui-e2e.config.ts \
+            --configLoader runner \
+            --maxWorkers=1 \
+            ui/src/e2e/native-conversation-running-ui.e2e.test.ts \
             2>&1 | tee "$GITHUB_WORKSPACE/prefix.log"
           grep -q 'VERDICT:pre-fix:KILLED:navigate-timeout' "$GITHUB_WORKSPACE/prefix.log"
           grep -q 'wall jump Date.now delta=60000ms' "$GITHUB_WORKSPACE/prefix.log"
@@ -253,9 +230,8 @@ jobs:
             echo "PROOF_TREE_DIFF:"
             cat proof-harness.diff
           } | tee "$GITHUB_WORKSPACE/proof-summary.log"
-          diff -q post/ui/src/app/native-conversation-running-ui.browser.test.ts \
-            pre/ui/src/app/native-conversation-running-ui.browser.test.ts
-          diff -q post/ui/vitest.config.ts pre/ui/vitest.config.ts
+          diff -q post/ui/src/e2e/native-conversation-running-ui.e2e.test.ts \
+            pre/ui/src/e2e/native-conversation-running-ui.e2e.test.ts
       - uses: actions/upload-artifact@v4
         if: always()
         with:
