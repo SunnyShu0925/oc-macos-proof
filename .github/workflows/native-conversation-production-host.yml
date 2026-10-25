@@ -1,0 +1,75 @@
+name: PR 182627 production Host ACK proof
+
+on:
+  workflow_dispatch:
+
+jobs:
+  production-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: parent
+            ref: a2e646bc7343d31fa6446a978bf3d810d763c990
+          - version: head
+            ref: c7fb8202e193c22be02eee2ea280771d0d07f54f
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Checkout production Host proof harness
+        uses: actions/checkout@v4
+        with:
+          path: proof
+          ref: ${{ github.sha }}
+
+      - name: Checkout OpenClaw exact revision
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ matrix.ref }}
+          path: openclaw
+          fetch-depth: 1
+
+      - name: Verify exact revision
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ matrix.ref }}"
+          git diff --name-only HEAD^ HEAD
+
+      - name: Install proof test
+        run: |
+          cp proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift \
+            openclaw/apps/macos/Tests/OpenClawIPCTests/
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+
+      - name: Install dependencies
+        working-directory: openclaw
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Prepare Apple assets
+        working-directory: openclaw
+        run: node scripts/prepare-apple-mermaid.mjs
+
+      - name: Run production Host proof
+        working-directory: openclaw
+        continue-on-error: true
+        run: |
+          swift test --package-path apps/macos \
+            --filter PR182627ProductionHostTests 2>&1 | tee "/tmp/${{ matrix.version }}.log"
+          echo "PROOF_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+
+      - name: Collect
+        if: always()
+        run: |
+          grep -F '[PR182627Host]' "/tmp/${{ matrix.version }}.log" || true
+          tail -30 "/tmp/${{ matrix.version }}.log" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-host-${{ matrix.version }}
+          path: /tmp/${{ matrix.version }}.log
