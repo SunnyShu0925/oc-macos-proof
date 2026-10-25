@@ -66,7 +66,8 @@ jobs:
           file=ui/src/app/native-conversation-bridge.ts
           test_file=ui/src/app/native-conversation-running-ui.browser.test.ts
           config_file=ui/vitest.config.ts
-          for path in "$file" ui/test-helpers/control-ui-e2e.ts "$config_file"; do
+          for path in "$file" ui/src/test-helpers/control-ui-e2e.ts \
+            ui/src/app/native-conversation-bridge.test.ts "$config_file"; do
             for checkout in post pre; do
               if ! test -f "$checkout/$path"; then
                 echo "Missing proof file: $checkout/$path" >&2
@@ -91,9 +92,11 @@ jobs:
           echo 'bridge diff ready'
           cp harness/.github/workflows/native-conversation-running-ui.browser.test.ts \
             "post/$test_file"
+          test -f "post/$test_file"
           echo 'post test ready'
           cp harness/.github/workflows/native-conversation-running-ui.browser.test.ts \
             "pre/$test_file"
+          test -f "pre/$test_file"
           echo 'pre test ready'
           for checkout in post pre; do
             node -e '
