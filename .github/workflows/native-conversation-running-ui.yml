@@ -98,7 +98,7 @@ jobs:
           for path in \
             "ui/src/app/native-conversation-running-ui.browser.test.ts" \
             "ui/vitest.config.ts"; do
-            diff -u "post/$path" "pre/$path" > "$GITHUB_WORKSPACE/proof-harness.diff" || true
+            diff -u "post/$path" "pre/$path" >> "$GITHUB_WORKSPACE/proof-harness.diff" || true
           done
           test ! -s "$GITHUB_WORKSPACE/proof-harness.diff"
           shasum post/ui/src/app/native-conversation-running-ui.browser.test.ts > "$GITHUB_WORKSPACE/harness.sha256"
