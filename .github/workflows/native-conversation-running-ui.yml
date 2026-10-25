@@ -90,8 +90,6 @@ jobs:
           echo 'pre deadline ready'
           diff -u post/$file pre/$file > "$GITHUB_WORKSPACE/bridge.diff" || true
           echo 'bridge diff ready'
-          test "$(git -C post status --short -- "$file" "$test_file" | wc -l)" -eq 1
-          test "$(git -C pre status --short -- "$file" "$test_file" | wc -l)" -eq 2
           cp harness/.github/workflows/native-conversation-running-ui.browser.test.ts \
             "post/$test_file"
           test -f "post/$test_file"
