@@ -65,14 +65,14 @@ async function installHost(page: Page, version: string) {
 }
 
 async function command(page: Page, target: typeof first, requestId: string, label: string) {
-  await page.evaluate(
+  const dispatched = await page.evaluate(
     ({ targetSession, id, variantLabel }) => {
       const state = Reflect.get(window, "__nativeConversationProof") as Probe;
       if (!state.documentId) {
         throw new Error("Native conversation bridge did not publish a documentId");
       }
       console.log(`[proof] ${variantLabel} dispatch native command requestId=${id}`);
-      window.dispatchEvent(
+      return window.dispatchEvent(
         new CustomEvent("openclaw:native-conversation-command", {
           detail: {
             contract: 1,
@@ -85,7 +85,11 @@ async function command(page: Page, target: typeof first, requestId: string, labe
       );
     },
     { targetSession: target, id: requestId, variantLabel: label },
+    { timeout: 10_000 },
   );
+  if (!dispatched) {
+    throw new Error(`Native conversation command ${requestId} was canceled`);
+  }
 }
 
 async function waitForRequest(
@@ -102,7 +106,15 @@ async function waitForRequest(
     }
     await page.waitForTimeout(100);
   }
-  throw new Error(`No chat.startup RPC after request #${after}; page URL=${page.url()}`);
+  throw new Error(
+    `No chat.startup RPC after request #${after}; page URL=${page.url()}; messages=${JSON.stringify(
+      await page.evaluate(
+        () => (Reflect.get(window, "__nativeConversationProof") as Probe).messages,
+        undefined,
+        { timeout: 5_000 },
+      ),
+    )}`,
+  );
 }
 
 async function result(page: Page, requestId: string) {
