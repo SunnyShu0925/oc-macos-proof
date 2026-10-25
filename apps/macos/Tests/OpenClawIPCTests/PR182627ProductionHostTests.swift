@@ -70,7 +70,7 @@ struct PR182627ProductionHostTests {
         let following = Task { await bridge.request(.focusComposer) }
         let followingRequest = try await Self.waitForCommand(in: document.webView, count: 3)
         try await Self.run(
-            "const request=window.lastCommand.requestId;window.fixturePost({type:'command-result',requestId,ok:true});window.fixturePhase='firstFinished'",
+            "const firstFinishedId=window.lastCommand.requestId;window.fixturePost({type:'command-result',requestId:firstFinishedId,ok:true});window.fixturePhase='firstFinished'",
             in: document.webView)
         let firstResult = await first.value
         Self.trace("first native ok=\(firstResult.ok) error=\(firstResult.error ?? "none")")
@@ -95,7 +95,7 @@ struct PR182627ProductionHostTests {
         try await Self.waitForState(in: document.webView, "secondStarted")
         Self.trace("second navigate started after first host ack")
         try await Self.run(
-            "const request=window.lastCommand.requestId;window.fixturePhase='secondStarted';setTimeout(()=>{window.fixturePost({type:'command-result',requestId,ok:true});window.fixturePhase='secondFinished'},250)",
+            "const secondFinishedId=window.lastCommand.requestId;window.fixturePhase='secondStarted';setTimeout(()=>{window.fixturePost({type:'command-result',requestId:secondFinishedId,ok:true});window.fixturePhase='secondFinished'},250)",
             in: document.webView)
         let result = await second.value
         let secondHost = try await Self.waitForResult(
