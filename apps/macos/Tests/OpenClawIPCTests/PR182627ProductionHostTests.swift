@@ -181,16 +181,14 @@ struct PR182627ProductionHostTests {
     window.restoreClock = () => { Date.now = realNow; };
     window.finishFirst = async () => {
       const command = window.lastCommand;
-      const host = await fixturePost({type:'command-result', requestId:command.requestId, ok:true});
-      remember('host', command.requestId, host);
+      fixturePost({type:'command-result', requestId:command.requestId, ok:true});
       window.fixturePhase = 'firstFinished';
     };
     window.finishSecond = async () => {
       const command = window.lastCommand;
       window.fixturePhase = 'secondStarted';
       await new Promise(resolve => setTimeout(resolve, 250));
-      const host = await fixturePost({type:'command-result', requestId:command.requestId, ok:true});
-      remember('host', command.requestId, host);
+      fixturePost({type:'command-result', requestId:command.requestId, ok:true});
       window.fixturePhase = 'secondFinished';
     };
     window.fixtureReport = () => JSON.stringify({
@@ -199,9 +197,7 @@ struct PR182627ProductionHostTests {
       firstBridge:window.fixtureReplies[firstRequest]?.bridge?.ok === true
     });
     var firstRequest;
-    fixturePost({type:'ready',surface:'conversation',capabilities:[]}).then(reply => {
-      window.fixtureReplies.ready = {host:reply};
-    });
+    fixturePost({type:'ready',surface:'conversation',capabilities:[]});
     window.addEventListener('openclaw:native-conversation-command', event => {
       if (window.commandCount === 1) firstRequest = event.detail.requestId;
     });

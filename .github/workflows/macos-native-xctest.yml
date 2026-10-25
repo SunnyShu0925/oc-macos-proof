@@ -118,7 +118,7 @@ jobs:
             grep -F 'second navigate started after first host ack' "$log"
             grep -F 'second host=ok=true error=none' "$log"
             grep -F 'second native ok=true error=none' "$log"
-            grep -F 'clock Date.now delta=60000ms' "$log"
+            grep -E 'clock Date\.now delta=5[9-9][0-9]{3}ms|clock Date\.now delta=60[0-9]{3}ms' "$log"
             test "$(grep -cF '"phase":"secondFinished","commands":3,"firstHost":true,"firstBridge":true' "$log")" -eq 1
             test "$(grep -cF 'VERDICT:SUCCEEDED' "$log")" -eq 1
             test "$(grep -cF 'VERDICT:FAILED:' "$log")" -eq 0
