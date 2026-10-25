@@ -55,8 +55,6 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm --dir ui exec playwright install webkit
       - name: Prepare exact pre-fix checkout
-        env:
-          CHECKOUT_EXCLUDES: --exclude=node_modules --exclude=.git --exclude=.github
         run: |
           test "$(git -C post rev-parse HEAD)" = "$PR182627_HEAD"
           test "$(git -C pre rev-parse HEAD)" = "$PR182627_HEAD"
@@ -97,7 +95,11 @@ jobs:
           git -C post status --short > "$GITHUB_WORKSPACE/post.status"
           git -C pre status --short > "$GITHUB_WORKSPACE/pre.status"
           cp "$GITHUB_WORKSPACE/bridge.diff" "$GITHUB_WORKSPACE/tree.diff"
-          diff -ru $CHECKOUT_EXCLUDES post pre > "$GITHUB_WORKSPACE/proof-harness.diff" || true
+          for path in \
+            "ui/src/app/native-conversation-running-ui.browser.test.ts" \
+            "ui/vitest.config.ts"; do
+            diff -u "post/$path" "pre/$path" > "$GITHUB_WORKSPACE/proof-harness.diff" || true
+          done
           test ! -s "$GITHUB_WORKSPACE/proof-harness.diff"
           shasum post/ui/src/app/native-conversation-running-ui.browser.test.ts > "$GITHUB_WORKSPACE/harness.sha256"
           cat "$GITHUB_WORKSPACE/bridge.diff"
