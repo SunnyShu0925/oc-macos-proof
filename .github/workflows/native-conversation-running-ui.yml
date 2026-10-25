@@ -1,0 +1,160 @@
+name: Native conversation running UI proof (PR #182627)
+
+on:
+  push:
+    branches: [proof/pr-182627-running-ui]
+    paths:
+      - .github/workflows/native-conversation-running-ui.yml
+      - .github/workflows/native-conversation-running-ui.browser.test.ts
+  workflow_dispatch:
+    inputs:
+      head:
+        required: true
+        default: c7fb8202e193c22be02eee2ea280771d0d07f54f
+      harness:
+        required: true
+        default: proof/pr-182627-running-ui
+
+jobs:
+  proof:
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ inputs.head }}
+          path: post
+          fetch-depth: 2
+      - uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ inputs.head }}
+          path: pre
+          fetch-depth: 2
+      - name: Checkout proof harness
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: ${{ inputs.harness }}
+          path: harness
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+      - name: Install post-fix checkout
+        working-directory: post
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm --dir ui exec playwright install webkit
+      - name: Prepare exact pre-fix checkout
+        run: |
+          test "$(git -C post rev-parse HEAD)" = "${{ inputs.head }}"
+          test "$(git -C pre rev-parse HEAD)" = "${{ inputs.head }}"
+          file=ui/src/app/native-conversation-bridge.ts
+          git -C post show "${{ inputs.head }}^:$file" > pre/$file
+          grep -q 'deadline = performance.now()' post/$file
+          grep -q 'deadline = Date.now()' pre/$file
+          diff -u post/$file pre/$file > "$GITHUB_WORKSPACE/bridge.diff" || true
+          install -D harness/.github/workflows/native-conversation-running-ui.browser.test.ts \
+            post/ui/src/app/native-conversation-running-ui.browser.test.ts
+          install -D harness/.github/workflows/native-conversation-running-ui.browser.test.ts \
+            pre/ui/src/app/native-conversation-running-ui.browser.test.ts
+          for checkout in post pre; do
+            node -e '
+              const fs = require("fs");
+              const file = process.argv[1];
+              const source = fs.readFileSync(file, "utf8");
+              const marker = "const webkitTestFiles = [";
+              const entry = "\n  \"src/app/native-conversation-running-ui.browser.test.ts\",";
+              if (!source.includes(entry.trim())) {
+                if (source.split(marker).length !== 2) {
+                  throw new Error("WebKit test registry marker missing or ambiguous");
+                }
+                fs.writeFileSync(file, source.replace(marker, marker + entry));
+              }
+            ' \
+            "$checkout/ui/vitest.config.ts"
+          done
+          git -C post status --short > "$GITHUB_WORKSPACE/post.status"
+          git -C pre status --short > "$GITHUB_WORKSPACE/pre.status"
+          diff -u post.status pre.status > "$GITHUB_WORKSPACE/tree.diff"
+          test "$(wc -l < "$GITHUB_WORKSPACE/tree.diff")" -gt 0
+          diff -ru --exclude=node_modules --exclude=.git post pre > "$GITHUB_WORKSPACE/proof-harness.diff" || true
+          cat "$GITHUB_WORKSPACE/bridge.diff"
+          cat "$GITHUB_WORKSPACE/tree.diff"
+      - name: Install pre-fix dependencies
+        working-directory: pre
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Production Control UI and WebKit environment
+        working-directory: post
+        run: |
+          echo "PR_HEAD=$(git rev-parse HEAD)"
+          echo "PR_PARENT=$(git rev-parse HEAD^)"
+          echo "RUNNER_OS=$RUNNER_OS RUNNER_IMAGE=$ImageOS RUNNER_ARCH=$RUNNER_ARCH"
+          node --version
+          pnpm --version
+          pnpm --dir ui exec playwright --version
+      - name: Run post-fix WebKit proof
+        working-directory: post
+        env:
+          OPENCLAW_UI_WEBKIT: "1"
+          PR182627_PROOF_VARIANT: post-fix
+        run: |
+          set -o pipefail
+          pnpm --dir ui exec vitest run --config vitest.config.ts --project=webkit \
+            --maxWorkers=1 src/app/native-conversation-running-ui.browser.test.ts \
+            2>&1 | tee "$GITHUB_WORKSPACE/postfix.log"
+          grep -q 'VERDICT:post-fix:SUCCEEDED:none' "$GITHUB_WORKSPACE/postfix.log"
+          grep -q 'queue held 2[0-9][0-9][0-9]ms' "$GITHUB_WORKSPACE/postfix.log"
+          grep -q 'actual router RPC .*session=agent:main:second' "$GITHUB_WORKSPACE/postfix.log"
+      - name: Run pre-fix WebKit proof
+        working-directory: pre
+        env:
+          OPENCLAW_UI_WEBKIT: "1"
+          PR182627_PROOF_VARIANT: pre-fix
+        run: |
+          set -o pipefail
+          pnpm --dir ui exec vitest run --config vitest.config.ts --project=webkit \
+            --maxWorkers=1 src/app/native-conversation-running-ui.browser.test.ts \
+            2>&1 | tee "$GITHUB_WORKSPACE/prefix.log"
+          grep -q 'VERDICT:pre-fix:KILLED:navigate-timeout' "$GITHUB_WORKSPACE/prefix.log"
+          grep -q 'wall jump Date.now delta=60000ms' "$GITHUB_WORKSPACE/prefix.log"
+      - name: Run exact native host proof
+        working-directory: pre
+        run: |
+          set -o pipefail
+          pnpm mac:test -- NativeConversationBridgeTests \
+            2>&1 | tee "$GITHUB_WORKSPACE/native-xctest.log"
+      - name: Verify proof trees and capture logs
+        if: always()
+        run: |
+          {
+            echo "PR_HEAD=$(git -C post rev-parse HEAD)"
+            echo "PR_PARENT=$(git -C pre rev-parse HEAD^)"
+            echo "RUNNER_OS=$RUNNER_OS RUNNER_IMAGE=$ImageOS RUNNER_ARCH=$RUNNER_ARCH"
+            echo "POST_GREP:"
+            grep -E '\[proof\]|VERDICT|Tests ' postfix.log || true
+            echo "PRE_GREP:"
+            grep -E '\[proof\]|VERDICT|Tests ' prefix.log || true
+            echo "PROOF_TREE_DIFF:"
+            cat proof-harness.diff
+          } | tee "$GITHUB_WORKSPACE/proof-summary.log"
+          diff -q post/ui/src/app/native-conversation-running-ui.browser.test.ts \
+            pre/ui/src/app/native-conversation-running-ui.browser.test.ts
+          diff -q post/ui/vitest.config.ts pre/ui/vitest.config.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-conversation-running-ui-logs
+          path: |
+            postfix.log
+            prefix.log
+            proof-summary.log
+            bridge.diff
+            proof-harness.diff
+            tree.diff
