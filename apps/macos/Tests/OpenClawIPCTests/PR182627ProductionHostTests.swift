@@ -80,6 +80,16 @@ struct PR182627ProductionHostTests {
             in: document.webView, requestId: followingRequest, commandResult: true)
         Self.trace("following host=\(Self.ack(followingHost)) native ok=\(followingResult.ok)")
 
+        let secondLiteral = try Self.literal(secondRequest)
+        let secondStartReply = try await Self.evaluate(
+            "window.fixtureReplies[\(secondLiteral)]?.host ?? null",
+            in: document.webView)
+        guard let secondStartReply = secondStartReply as? [String: Any],
+              secondStartReply["ok"] as? Bool == true
+        else {
+            Self.trace("VERDICT:FAILED:second-start-ack")
+            return
+        }
         try await Self.waitForState(in: document.webView, "secondStarted")
         Self.trace("second navigate started after first host ack")
         _ = try await Self.evaluate("window.finishSecond()", in: document.webView)
@@ -135,7 +145,7 @@ struct PR182627ProductionHostTests {
         requestId: String,
         commandResult: Bool) async throws -> Any?
     {
-        let literal = try String(decoding: JSONEncoder().encode(requestId), as: UTF8.self)
+        let literal = try Self.literal(requestId)
         try await TestWait.state(commandResult ? "bridge result \(requestId)" : "result ACK \(requestId)") {
             guard let replies = try? await self.evaluate(
                 "window.fixtureReplies[\(literal)]", in: webView) as? [String: Any],
@@ -146,6 +156,10 @@ struct PR182627ProductionHostTests {
         let replies = try #require(
             try await self.evaluate("window.fixtureReplies[\(literal)]", in: webView) as? [String: Any])
         return replies[commandResult ? "bridge" : "host"]
+    }
+
+    private static func literal(_ value: String) throws -> String {
+        try String(decoding: JSONEncoder().encode(value), as: UTF8.self)
     }
 
     private static let html = """
