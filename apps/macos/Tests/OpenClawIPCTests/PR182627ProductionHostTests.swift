@@ -69,7 +69,9 @@ struct PR182627ProductionHostTests {
         // replacing its result. Its own real Host ACK proves the queue continued.
         let following = Task { await bridge.request(.focusComposer) }
         let followingRequest = try await Self.waitForCommand(in: document.webView, count: 3)
-        _ = try await Self.evaluate("window.finishFirst()", in: document.webView)
+        try await Self.run(
+            "const request=window.lastCommand.requestId;window.fixturePost({type:'command-result',requestId,ok:true});window.fixturePhase='firstFinished'",
+            in: document.webView)
         let firstResult = await first.value
         Self.trace("first native ok=\(firstResult.ok) error=\(firstResult.error ?? "none")")
         let firstBridgeHost = try await Self.waitForResult(
@@ -92,7 +94,9 @@ struct PR182627ProductionHostTests {
         }
         try await Self.waitForState(in: document.webView, "secondStarted")
         Self.trace("second navigate started after first host ack")
-        _ = try await Self.evaluate("window.finishSecond()", in: document.webView)
+        try await Self.run(
+            "const request=window.lastCommand.requestId;window.fixturePhase='secondStarted';setTimeout(()=>{window.fixturePost({type:'command-result',requestId,ok:true});window.fixturePhase='secondFinished'},250)",
+            in: document.webView)
         let result = await second.value
         let secondHost = try await Self.waitForResult(
             in: document.webView, requestId: secondRequest, commandResult: true)
@@ -122,6 +126,10 @@ struct PR182627ProductionHostTests {
 
     private static func evaluate(_ script: String, in webView: WKWebView) async throws -> Any? {
         try await webView.evaluateJavaScript(script)
+    }
+
+    private static func run(_ script: String, in webView: WKWebView) async throws {
+        try await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page)
     }
 
     private static func waitForCommand(in webView: WKWebView, count: Int) async throws -> String {
@@ -193,18 +201,6 @@ struct PR182627ProductionHostTests {
       window.fixturePhase = 'clockStepped';
     };
     window.restoreClock = () => { Date.now = realNow; };
-    window.finishFirst = async () => {
-      const command = window.lastCommand;
-      fixturePost({type:'command-result', requestId:command.requestId, ok:true});
-      window.fixturePhase = 'firstFinished';
-    };
-    window.finishSecond = async () => {
-      const command = window.lastCommand;
-      window.fixturePhase = 'secondStarted';
-      await new Promise(resolve => setTimeout(resolve, 250));
-      fixturePost({type:'command-result', requestId:command.requestId, ok:true});
-      window.fixturePhase = 'secondFinished';
-    };
     window.fixtureReport = () => JSON.stringify({
       phase:window.fixturePhase, commands:window.commandCount,
       firstHost:window.fixtureReplies[firstRequest]?.host?.ok === true,
