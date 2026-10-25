@@ -3,22 +3,100 @@ name: macOS Native WKWebView Bridge XCTest (PR #182627)
 on:
   workflow_dispatch:
     inputs:
-      pr_branch:
-        description: PR branch on SunnyShu0925/openclaw to test
+      proof_ref:
+        description: Isolated proof harness branch
         required: true
-        default: fix/native-conversation-bridge-deadline-monotonic-172
+        default: proof/pr-182627-isolated-host
 
 jobs:
-  proof:
-    runs-on: macos-latest
+  production-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: parent
+            ref: a2e646bc7343d31fa6446a978bf3d810d763c990
+          - version: head
+            ref: c7fb8202e193c22be02eee2ea280771d0d07f54f
+    runs-on: macos-26
     timeout-minutes: 50
     steps:
-      - name: Checkout openclaw PR branch (fork)
+      - name: Checkout production Host proof harness
         uses: actions/checkout@v4
         with:
-          repository: SunnyShu0925/openclaw
-          ref: ${{ github.event.inputs.pr_branch }}
-          path: openclaw
+          repository: SunnyShu0925/oc-macos-proof
+          ref: ${{ inputs.proof_ref }}
+          path: proof
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact proof harness
+        env:
+          PROOF_SHA: ${{ github.sha }}
+          PROOF_REF: ${{ inputs.proof_ref }}
+        run: |
+          test "$(git -C proof rev-parse HEAD)" = "$PROOF_SHA"
+          test "$PROOF_REF" = "proof/pr-182627-isolated-host"
+          test "$(git -C proof diff --name-only HEAD^ HEAD)" \
+            = "$(printf '%s\n' \
+              '.github/workflows/macos-native-xctest.yml' \
+              'apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift')"
+          ! git -C proof rev-parse -q --verify HEAD^2
+          grep -F "name: Check production Host fixture" \
+            proof/.github/workflows/macos-native-xctest.yml
+          test "$(grep -cF 'unexpected request=' \
+            proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift)" -eq 1
+          grep -F 'rawResponseHandler: { [pages] request in' \
+            proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift
+          grep -F 'func reply(request: String, bridge: Data) -> DashboardHTTPFixture.RawResponse?' \
+            proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift
+          grep -F 'let isPage = path.hasPrefix("/control/chat/main") || path == "/control/"' \
+            proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift
+          grep -F 'let contentType = isPage ? "text/html" : "application/javascript"' \
+            proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift
+          test "$(grep -cF '+ "Content-Type: \(contentType)"' \
+            proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift)" -eq 1
+          grep -F '#expect(httpResponse.mimeType == "text/html"' \
+            proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift
+          grep -F 'currentBridge.load(server.url("/control/chat/main?pr182627-proof"))' \
+            proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift
+          grep -F 'private static func state(' \
+            proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift
+          test "$(grep -cF 'unsafe_window_ms=' \
+            proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift)" -eq 1
+          test "$(grep -cF 'production page bridge error=\(' \
+            proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift)" -eq 1
+          test "$(grep -cF 'grep -F '\''production page bridge error=none'\'' "$log"' \
+            proof/.github/workflows/macos-native-xctest.yml)" -eq 1
+          test "$(grep -cF 'AsyncTimeout.withTimeout' \
+            proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift)" -eq 0
+          if sed -n '/private struct BridgePages/,/private final class LockedBox/p' \
+            proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift |
+            grep -En 'Self\.(trace|reply)\(|PR182627ProductionHostTests\.(trace|reply)\('; then
+            exit 1
+          fi
+
+      - name: Verify exact production revision
+        env:
+          PR_REF: ${{ matrix.ref }}
+        run: |
+          git init openclaw
+          git -C openclaw remote add origin \
+            https://github.com/openclaw/openclaw.git
+          git -C openclaw -c http.version=HTTP/1.1 fetch --no-tags \
+            --no-write-fetch-head --filter=blob:none --depth 1 origin "$PR_REF"
+          git -C openclaw checkout --detach "$PR_REF"
+          test "$(git -C openclaw rev-parse HEAD)" = "$PR_REF"
+          if [[ "${{ matrix.version }}" == "parent" ]]; then
+            git -C openclaw show HEAD:ui/src/app/native-conversation-bridge.ts | grep -F 'Date.now() + RESPONSE_TIMEOUT_MS'
+          else
+            git -C openclaw show HEAD:ui/src/app/native-conversation-bridge.ts | grep -F 'performance.now() + RESPONSE_TIMEOUT_MS'
+          fi
+
+      - name: Install production Host proof test
+        run: |
+          cp proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift \
+            openclaw/apps/macos/Tests/OpenClawIPCTests/
 
       - name: Toolchain
         run: |
@@ -41,25 +119,217 @@ jobs:
         run: |
           node scripts/prepare-apple-mermaid.mjs
 
-      - name: Run real native WKWebView bridge XCTest (post-fix head)
+      - name: Build exact production native bridge bundle
         working-directory: openclaw
-        continue-on-error: true
+        env:
+          PROOF_VERSION: ${{ matrix.version }}
         run: |
-          which node
-          node -v
-          swift test --package-path apps/macos --filter NativeConversationBridgeTests 2>&1 | tee /tmp/postfix.log
-          echo "PROOF_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+          root="$(pwd -P)"
+          entry="/tmp/pr182627-bridge-entry-$PROOF_VERSION.ts"
+          outdir="/tmp/pr182627-bridge-bundle-$PROOF_VERSION"
+          mkdir -p "$outdir"
+          printf 'export { createNativeConversationBridge } from %s;\n' \
+            "\"$root/ui/src/app/native-conversation-bridge.ts\"" > "$entry"
+          node --input-type=module - "$root" "$entry" "$outdir" <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { resolve } from "node:path";
+          import { pathToFileURL } from "node:url";
+          const [root, entry, outdir] = process.argv.slice(2);
+          const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+          const vite = await import(
+            pathToFileURL(resolve(root, "node_modules/vite/dist/node/index.js")).href
+          );
+          const localePlugin = await vite.runnerImport(
+            resolve(root, "ui/config/control-ui-locales.ts"),
+            { configFile: false },
+          );
+          const aliasConfig = await vite.runnerImport(resolve(root, "ui/vite.config.ts"), {
+            configFile: false,
+          });
+          await vite.build({
+            root,
+            configFile: false,
+            logLevel: "warn",
+            publicDir: false,
+            cacheDir: resolve(outdir, ".vite"),
+            resolve: {
+              alias: [
+                ...aliasConfig.module.resolveExternalPackageAliasesForVite(),
+                ...aliasConfig.module.resolveSourcePackageAliasesForVite(),
+                ...aliasConfig.module.resolveTsconfigPathAliasesForVite(),
+              ],
+            },
+            plugins: [localePlugin.module.controlUiLocaleModulesPlugin()],
+            build: {
+              outDir: outdir,
+              emptyOutDir: true,
+              write: true,
+              minify: false,
+              reportCompressedSize: false,
+              lib: { entry, formats: ["es"], fileName: () => "pr182627-bridge.js" },
+              cssCodeSplit: false,
+            },
+          });
+          const bundle = resolve(outdir, "pr182627-bridge.js");
+          const output = readFileSync(bundle, "utf8");
+          if (!output.includes("createNativeConversationBridge")) {
+            throw new Error("bundle entry does not export createNativeConversationBridge");
+          }
+          console.log(`bundle=${bundle} bytes=${Buffer.byteLength(output)} vite=${pkg.devDependencies.vite}`);
+          NODE
+          bundle="/tmp/pr182627-bridge-bundle-$PROOF_VERSION/pr182627-bridge.js"
+          test -s "$bundle"
+          node --check "$bundle"
+          grep -F 'createNativeConversationBridge' "$bundle"
+          for chunk in locale-catalog- listener- native-session-menu.runtime-; do
+            test "$(find "$(dirname "$bundle")" -maxdepth 1 -type f -name "$chunk*.js" | wc -l)" -eq 1
+            grep -F "./$chunk" "$bundle"
+          done
+          printf 'PR182627_BRIDGE_BUNDLE=%s\n' "$bundle" >> "$GITHUB_ENV"
+
+      - name: Check production Host fixture
+        working-directory: openclaw
+        env:
+          PROOF_VERSION: ${{ matrix.version }}
+        run: |
+          test -s /tmp/pr182627-bridge-bundle-$PROOF_VERSION/pr182627-bridge.js
+          node --input-type=module - \
+            "/tmp/pr182627-bridge-bundle-$PROOF_VERSION/pr182627-bridge.js" \
+            > "/tmp/$PROOF_VERSION-fixture.log" <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { basename, dirname } from "node:path";
+          const bundle = process.argv[2];
+          const source = readFileSync(bundle, "utf8");
+          const chunks = [
+            ["locale-catalog-", ".js", "static", 1],
+            ["listener-", ".js", "static", 1],
+            ["native-session-menu.runtime-", ".js", "dynamic", 1],
+          ];
+          for (const [prefix, suffix, kind, expected] of chunks) {
+            const pattern = kind === "static"
+              ? new RegExp(`"\\./${prefix}[A-Za-z0-9_-]+${suffix.replaceAll(".", "\\.")}"`, "g")
+              : new RegExp(`import\\("\\./${prefix}[A-Za-z0-9_-]+${suffix.replaceAll(".", "\\.")}"\\)`, "g");
+            const matches = [...source.matchAll(pattern)].map((match) =>
+              kind === "static" ? match[0].slice(3, -1) : match[0].slice(8, -2));
+            if (matches.length !== expected) {
+              throw new Error(`${prefix} expected ${expected} import, got ${matches.length}`);
+            }
+            for (const chunk of matches) {
+              const body = readFileSync(`${dirname(bundle)}/${chunk}`);
+              if (!body.length) throw new Error(`${chunk} is empty`);
+              console.log(`fixture:${basename(chunk)} bytes=${body.length}`);
+            }
+          }
+          NODE
+          exit "${PIPESTATUS[0]}"
+        timeout-minutes: 2
+
+      - name: Build production Host ACK proof
+        if: success()
+        working-directory: openclaw
+        run: |
+          swift build --package-path apps/macos --build-system native \
+            --enable-code-coverage --disable-index-store \
+            -Xswiftc -gline-tables-only --build-tests
+        timeout-minutes: 20
+
+      - name: Run production Host ACK proof
+        if: success()
+        working-directory: openclaw
+        env:
+          PR182627_BRIDGE_BUNDLE: /tmp/pr182627-bridge-bundle-${{ matrix.version }}/pr182627-bridge.js
+        run: |
+          rm -f "/tmp/${{ matrix.version }}.log"
+          test -s "$PR182627_BRIDGE_BUNDLE"
+          set -o pipefail
+          swift test --package-path apps/macos --build-system native \
+            --enable-code-coverage --disable-index-store \
+            -Xswiftc -gline-tables-only --skip-build \
+            --filter PR182627ProductionHostTests \
+            2>&1 | tee "/tmp/${{ matrix.version }}.log"
+        timeout-minutes: 6
 
       - name: Collect
         if: always()
         run: |
-          echo "=== POST-FIX tail ==="
-          tail -40 /tmp/postfix.log 2>/dev/null || true
+          if test -f "/tmp/${{ matrix.version }}.log"; then
+            grep -F '[PR182627Host]' "/tmp/${{ matrix.version }}.log" || true
+            tail -40 "/tmp/${{ matrix.version }}.log" || true
+          fi
+          if test -f "/tmp/${{ matrix.version }}-fixture.log"; then
+            tail -80 "/tmp/${{ matrix.version }}-fixture.log" || true
+          fi
+
+      - name: Enforce expected parent/head verdict
+        if: always()
+        env:
+          PROOF_VERSION: ${{ matrix.version }}
+          PRODUCTION_SHA: ${{ matrix.ref }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: SunnyShu0925/oc-macos-proof
+          PROOF_RUN_ID: ${{ github.run_id }}
+          PROOF_SHA: ${{ github.sha }}
+          PROOF_REF: ${{ inputs.proof_ref }}
+        run: |
+          log="/tmp/$PROOF_VERSION.log"
+          test -f "$log"
+          grep -E '^fixture:(locale-catalog-|listener-|native-session-menu\.runtime-)' \
+            "/tmp/$PROOF_VERSION-fixture.log"
+          provenance=$(mktemp "/tmp/production-host-$PROOF_VERSION-provenance.XXXXXX.json")
+          gh api "repos/$REPOSITORY/actions/runs/$PROOF_RUN_ID" > "$provenance"
+          test "$(jq -r .head_sha "$provenance")" = "$PROOF_SHA"
+          test "$PROOF_REF" = "proof/pr-182627-isolated-host"
+          test "$(git -C proof rev-parse HEAD)" = "$PROOF_SHA"
+          test "$(git -C openclaw rev-parse HEAD)" = "$PRODUCTION_SHA"
+          grep -F 'production page bridge error=none' "$log"
+          grep -F '[PR182627Host] VERDICT:START' "$log"
+          bundle="/tmp/pr182627-bridge-bundle-$PROOF_VERSION/pr182627-bridge.js"
+          test -s "$bundle"
+          for chunk in locale-catalog- listener- native-session-menu.runtime-; do
+            test "$(find "$(dirname "$bundle")" -maxdepth 1 -type f -name "$chunk*.js" | wc -l)" -eq 1
+          done
+          grep -F '/control/chat/main/locale-catalog-' "$log"
+          grep -F '/control/chat/main/listener-' "$log"
+          test "$(grep -cF 'unexpected request=' "$log")" -eq 0
+          test "$(grep -cF 'not a valid JavaScript MIME type' "$log")" -eq 0
+          test "$(grep -cF 'unsupported type' "$log")" -eq 0
+          if [[ "$PROOF_VERSION" == "head" ]]; then
+            test "$(grep -cF 'second native ok=true error=none' "$log")" -eq 1
+          fi
+          if [[ "$PROOF_VERSION" == "parent" ]]; then
+            test "$(grep -cF 'VERDICT:START' "$log")" -eq 1
+            grep -E 'first request=[0-9A-F-]+ host=ok=true error=none' "$log"
+            grep -E 'second request=[0-9A-F-]+ queued=true' "$log"
+            grep -F 'first page ack=ok=true error=none' "$log"
+            grep -F 'first native ok=true error=none' "$log"
+            grep -F 'first result host=ok=true error=none' "$log"
+            grep -F 'second started=false' "$log"
+            grep -F 'second native ok=false error=navigate-timeout' "$log"
+            grep -F 'page={"firstHost":true,"firstPage":true,"secondStatus":"queued"}' "$log"
+            test "$(grep -cF 'VERDICT:FAILED:navigate-timeout' "$log")" -eq 1
+            test "$(grep -cF 'VERDICT:SUCCEEDED' "$log")" -eq 0
+            test "$(grep -cF 'second host=' "$log")" -eq 0
+            test "$(grep -cF 'second page ack=' "$log")" -eq 0
+          else
+            test "$(grep -cF 'VERDICT:START' "$log")" -eq 1
+            grep -E 'first request=[0-9A-F-]+ host=ok=true error=none' "$log"
+            grep -E 'second request=[0-9A-F-]+ queued=true' "$log"
+            grep -F 'first page ack=ok=true error=none' "$log"
+            grep -F 'first native ok=true error=none' "$log"
+            grep -F 'first result host=ok=true error=none' "$log"
+            grep -F 'second started=true' "$log"
+            grep -F 'second host=ok=true error=none' "$log"
+            grep -F 'second native ok=true error=none' "$log"
+            grep -F 'second page ack=ok=true error=none' "$log"
+            grep -F 'page={"firstHost":true,"firstPage":true,"secondStatus":"started"}' "$log"
+            grep -E 'clock Date\.now delta=5[9-9][0-9]{3}ms|clock Date\.now delta=60[0-9]{3}ms' "$log"
+            grep -E 'clock performance\.now delta=[0-9]+ms' "$log"
+            test "$(grep -cF 'VERDICT:SUCCEEDED' "$log")" -eq 1
+            test "$(grep -cF 'VERDICT:FAILED:' "$log")" -eq 0
+          fi
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos-native-xctest-logs
-          path: |
-            /tmp/postfix.log
-            /tmp/prefix.log
+          name: production-host-${{ matrix.version }}
+          path: /tmp/${{ matrix.version }}.log
