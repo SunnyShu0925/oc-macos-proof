@@ -352,9 +352,6 @@ async function mountCase(variant: Variant, buildId: string) {
       return true;
     });
     expect(released).toBe(true);
-    const firstReceipt = await waitForResult(page, "first");
-    expect(firstReceipt).toMatchObject({ ok: true });
-    console.log(`[proof] ${variant.label} first receipt=${JSON.stringify(firstReceipt)}`);
     let secondReceipt: Record<string, unknown> | undefined;
     if (variant.ok) {
       await expect
@@ -367,7 +364,10 @@ async function mountCase(variant: Variant, buildId: string) {
         )
         .toBeDefined();
     } else {
-      secondReceipt = (await result(page, "second")) as Record<string, unknown> | undefined;
+      if (!variant.error) {
+        throw new Error("A failing proof variant must declare its expected error");
+      }
+      secondReceipt = await waitForResult(page, "second");
     }
     expect(secondReceipt).toBeDefined();
     const receiptDelayMs = Math.round(performance.now() - queuedAt);
@@ -378,6 +378,9 @@ async function mountCase(variant: Variant, buildId: string) {
     if (variant.error) {
       expect(secondReceipt).toMatchObject({ error: variant.error });
     }
+    const firstReceipt = await waitForResult(page, "first");
+    expect(firstReceipt).toMatchObject(variant.ok ? { ok: true } : { ok: false });
+    console.log(`[proof] ${variant.label} first receipt=${JSON.stringify(firstReceipt)}`);
     if (variant.ok) {
       await expect
         .poll(() => new URL(page.url()).pathname, { timeout: 5_000 })
