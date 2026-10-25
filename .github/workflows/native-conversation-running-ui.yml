@@ -70,16 +70,22 @@ jobs:
             test -f "$checkout/$file"
             test -f "$checkout/ui/test-helpers/control-ui-e2e.ts"
             test -f "$checkout/ui/vitest.config.ts"
-            test -d "$checkout/apps/macos/Tests/OpenClawIPCTests"
+          test -d "$checkout/apps/macos/Tests/OpenClawIPCTests"
           done
           git -C post show "$PR182627_HEAD^:$file" > pre/"$file"
+          echo 'pre-file ready'
           grep -q 'deadline = performance.now()' post/$file
+          echo 'post deadline ready'
           grep -q 'deadline = Date.now()' pre/$file
+          echo 'pre deadline ready'
           diff -u post/$file pre/$file > "$GITHUB_WORKSPACE/bridge.diff" || true
+          echo 'bridge diff ready'
           cp harness/.github/workflows/native-conversation-running-ui.browser.test.ts \
             "post/$test_file"
+          echo 'post test ready'
           cp harness/.github/workflows/native-conversation-running-ui.browser.test.ts \
             "pre/$test_file"
+          echo 'pre test ready'
           for checkout in post pre; do
             node -e '
               const fs = require("fs");
@@ -95,9 +101,12 @@ jobs:
               }
             ' \
             "$checkout/$config_file"
+            echo "config ready $checkout"
           done
           git -C post status --short > "$GITHUB_WORKSPACE/post.status"
+          echo 'post status ready'
           git -C pre status --short > "$GITHUB_WORKSPACE/pre.status"
+          echo 'pre status ready'
           status_ok=1
           for path in "$file" "$test_file" "$config_file"; do
             for checkout in post pre; do
