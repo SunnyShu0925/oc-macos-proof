@@ -96,7 +96,7 @@ jobs:
           done
           git -C post status --short > "$GITHUB_WORKSPACE/post.status"
           git -C pre status --short > "$GITHUB_WORKSPACE/pre.status"
-          diff -u post.status pre.status > "$GITHUB_WORKSPACE/tree.diff"
+          diff -u "$GITHUB_WORKSPACE/post.status" "$GITHUB_WORKSPACE/pre.status" > "$GITHUB_WORKSPACE/tree.diff"
           test "$(wc -l < "$GITHUB_WORKSPACE/tree.diff")" -gt 0
           diff -ru $CHECKOUT_EXCLUDES post pre > "$GITHUB_WORKSPACE/proof-harness.diff" || true
           test ! -s "$GITHUB_WORKSPACE/proof-harness.diff"
