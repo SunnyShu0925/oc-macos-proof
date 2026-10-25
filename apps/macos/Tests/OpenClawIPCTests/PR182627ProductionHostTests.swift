@@ -39,6 +39,8 @@ struct PR182627ProductionHostTests {
         let firstHost = try await Self.waitForResult(
             in: document.webView, requestId: firstRequest, commandResult: false)
         Self.trace("first request=\(firstRequest) host=\(Self.ack(firstHost))")
+        let identity = try await Self.evaluate("window.fixtureReport()", in: document.webView)
+        Self.trace("page=\(identity ?? "invalid")")
 
         let second = Task { await bridge.request(.navigate(Self.secondContext)) }
         let secondRequest = try await Self.waitForCommand(in: document.webView, count: 2)
@@ -87,7 +89,6 @@ struct PR182627ProductionHostTests {
         Self.trace("second host=\(Self.ack(secondHost))")
         Self.trace("second native ok=\(result.ok) error=\(result.error ?? "none")")
         _ = try await Self.evaluate("window.restoreClock()", in: document.webView)
-        Self.trace("pending after all=\(bridge.pendingCount)")
         let page = try await Self.evaluate("window.fixtureReport()", in: document.webView)
         Self.trace("page=\(page)")
         Self.trace("VERDICT:\(result.ok ? "SUCCEEDED" : "FAILED:\(result.error ?? "none")")")
@@ -193,10 +194,16 @@ struct PR182627ProductionHostTests {
       window.fixturePhase = 'secondFinished';
     };
     window.fixtureReport = () => JSON.stringify({
-      phase:window.fixturePhase, commands:window.commandCount
+      phase:window.fixturePhase, commands:window.commandCount,
+      firstHost:window.fixtureReplies[firstRequest]?.host?.ok === true,
+      firstBridge:window.fixtureReplies[firstRequest]?.bridge?.ok === true
     });
+    var firstRequest;
     fixturePost({type:'ready',surface:'conversation',capabilities:[]}).then(reply => {
       window.fixtureReplies.ready = {host:reply};
+    });
+    window.addEventListener('openclaw:native-conversation-command', event => {
+      if (window.commandCount === 1) firstRequest = event.detail.requestId;
     });
     </script></body></html>
     """

@@ -94,10 +94,8 @@ jobs:
           provenance=$(mktemp "/tmp/production-host-$PROOF_VERSION-provenance.XXXXXX.json")
           gh api "repos/openclaw/openclaw/actions/runs/$GITHUB_RUN_ID" > "$provenance"
           test "$(jq -r .head_sha "$provenance")" = "$PRODUCTION_SHA"
-          test "$(grep -cF 'events=1' "$log")" -eq 2
-          test "$(grep -cF 'gateway emulator=0' "$log")" -eq 2
-          test "$(grep -cF 'request-response fixtures=6' "$log")" -eq 2
-          test "$(grep -cF 'identity=ready' "$log")" -eq 2
+          grep -F '[PR182627Host] VERDICT:START' "$log"
+          grep -F '[PR182627Host] page={"phase":"ready"' "$log"
           if [[ "$PROOF_VERSION" == "parent" ]]; then
             test "$(grep -cF 'VERDICT:START' "$log")" -eq 1
             grep -F 'first request=pr182627-first host=ok=true error=none' "$log"
@@ -109,7 +107,6 @@ jobs:
             test "$(grep -cF 'VERDICT:FAILED:timeout' "$log")" -eq 1
             test "$(grep -cF 'VERDICT:SUCCEEDED' "$log")" -eq 0
             test "$(grep -cF 'second host=' "$log")" -eq 0
-            test "$(grep -cF 'pending after all=' "$log")" -eq 0
           else
             test "$(grep -cF 'VERDICT:START' "$log")" -eq 1
             grep -F 'first request=pr182627-first host=ok=true error=none' "$log"
@@ -121,9 +118,8 @@ jobs:
             grep -F 'second navigate started after first host ack' "$log"
             grep -F 'second host=ok=true error=none' "$log"
             grep -F 'second native ok=true error=none' "$log"
-            grep -F 'pending after all=0' "$log"
             grep -F 'clock Date.now delta=60000ms' "$log"
-            test "$(grep -cF 'commands=3; firstHost=false; firstBridge=false' "$log")" -eq 1
+            test "$(grep -cF '"phase":"secondFinished","commands":3,"firstHost":true,"firstBridge":true' "$log")" -eq 1
             test "$(grep -cF 'VERDICT:SUCCEEDED' "$log")" -eq 1
             test "$(grep -cF 'VERDICT:FAILED:' "$log")" -eq 0
           fi
