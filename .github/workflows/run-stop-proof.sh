@@ -206,7 +206,8 @@ if [ "$SCENARIO" = "port" ]; then
   ' > /tmp/busy-port.txt &
   PORT_PID=$!
   sleep 1
-  PROOF_PORT=$(grep -oP 'BUSY_PORT=\K[0-9]+' /tmp/busy-port.txt | head -1)
+  # macOS (BSD) grep has no -P; extract the port with sed.
+  PROOF_PORT=$(sed -n 's/.*BUSY_PORT=\([0-9][0-9]*\).*/\1/p' /tmp/busy-port.txt | head -1)
   echo ">>> real busy port=$PROOF_PORT (listener pid=$PORT_PID)" | tee -a "$LOG"
 fi
 
