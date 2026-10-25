@@ -99,9 +99,11 @@ jobs:
           for path in \
             "ui/src/app/native-conversation-running-ui.browser.test.ts" \
             "ui/vitest.config.ts"; do
-            if diff -u "post/$path" "pre/$path" >> "$GITHUB_WORKSPACE/proof-harness.diff"; then
-              :
-            elif test "$?" -ne 1; then
+            set +e
+            diff -u "post/$path" "pre/$path" >> "$GITHUB_WORKSPACE/proof-harness.diff"
+            comparison_status=$?
+            set -e
+            if test "$comparison_status" -gt 1; then
               exit 1
             fi
           done
