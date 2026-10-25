@@ -18,7 +18,7 @@ on:
 
 jobs:
   proof:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 75
     permissions:
       contents: read
@@ -227,7 +227,7 @@ jobs:
           swift test --package-path "$SWIFT_TEST_PACKAGE" --filter NativeConversationBridgeTests \
             2>&1 | tee "$GITHUB_WORKSPACE/native-xctest.log"
           grep -q 'NativeConversationBridgeTests.*passed' "$GITHUB_WORKSPACE/native-xctest.log"
-          grep -Eq 'Executed 5 tests?, with 0 failures' "$GITHUB_WORKSPACE/native-xctest.log"
+          grep -q 'Test run with 5 tests in 1 suite passed' "$GITHUB_WORKSPACE/native-xctest.log"
       - name: Verify proof trees and capture logs
         if: always()
         run: |
