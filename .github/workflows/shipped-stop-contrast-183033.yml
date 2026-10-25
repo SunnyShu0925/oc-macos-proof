@@ -52,7 +52,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "24.22.1"
 
       - name: Enable pnpm
         run: corepack enable pnpm
@@ -69,6 +69,7 @@ jobs:
       - name: Verify CLI
         run: |
           node --version
+          node -e "const [a,b,c]=process.versions.node.split('.').map(Number); if (a!==24||b<22||(b===22&&c<1)) { throw new Error('Node >=24.22.1 required, got '+process.versions.node); } console.log('node ok', process.versions.node)"
           sw_vers
           node openclaw.mjs --version
 
