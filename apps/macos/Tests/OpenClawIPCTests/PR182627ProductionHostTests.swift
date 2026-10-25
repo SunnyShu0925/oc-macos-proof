@@ -44,9 +44,24 @@ struct PR182627ProductionHostTests {
         let secondRequest = try await Self.waitForCommand(in: document.webView, count: 2)
         try await Self.waitForState(in: document.webView, "secondQueued")
         Self.trace("second request=\(secondRequest) queued=true")
+        let queuedNow = try await Self.evaluate("Date.now()", in: document.webView)
+        let queuedPerformance = try await Self.evaluate("performance.now()", in: document.webView)
         _ = try await Self.evaluate("window.stepWallClock()", in: document.webView)
         try await Self.waitForState(in: document.webView, "clockStepped")
-        Self.trace("clock Date.now=+60000 performance.now=unchanged")
+        let steppedNow = try await Self.evaluate("Date.now()", in: document.webView)
+        let steppedPerformance = try await Self.evaluate("performance.now()", in: document.webView)
+        guard let queuedNow = queuedNow as? NSNumber,
+              let steppedNow = steppedNow as? NSNumber,
+              let queuedPerformance = queuedPerformance as? NSNumber,
+              let steppedPerformance = steppedPerformance as? NSNumber
+        else {
+            Self.trace("VERDICT:FAILED:clock-unavailable")
+            return
+        }
+        let wallDelta = steppedNow.doubleValue - queuedNow.doubleValue
+        let monotonicDelta = max(0, steppedPerformance.doubleValue - queuedPerformance.doubleValue)
+        Self.trace("clock Date.now delta=\(Int(wallDelta.rounded()))ms")
+        Self.trace("clock performance.now delta=\(Int(monotonicDelta.rounded()))ms")
 
         // A second command waiting behind the first extends the queue without
         // replacing its result. Its own real Host ACK proves the queue continued.
@@ -76,6 +91,7 @@ struct PR182627ProductionHostTests {
         let page = try await Self.evaluate("window.fixtureReport()", in: document.webView)
         Self.trace("page=\(page)")
         Self.trace("VERDICT:\(result.ok ? "SUCCEEDED" : "FAILED:\(result.error ?? "none")")")
+        #expect(wallDelta >= 59_900, "wall clock did not step by 60 seconds")
         #expect(result.ok)
     }
 
