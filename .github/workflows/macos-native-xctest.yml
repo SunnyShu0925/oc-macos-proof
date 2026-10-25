@@ -7,18 +7,48 @@ on:
         description: PR branch on SunnyShu0925/openclaw to test
         required: true
         default: fix/native-conversation-bridge-deadline-monotonic-172
+      proof_ref:
+        description: Exact proof harness revision
+        required: true
+        default: 4f5489cb78a9b7f5b1eeda3c60392530d2f1a4aa
 
 jobs:
-  proof:
-    runs-on: macos-latest
+  production-host:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: parent
+            ref: a2e646bc7343d31fa6446a978bf3d810d763c990
+          - version: head
+            ref: c7fb8202e193c22be02eee2ea280771d0d07f54f
+    runs-on: macos-26
     timeout-minutes: 50
     steps:
+      - name: Checkout production Host proof harness
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.proof_ref }}
+          path: proof
+
       - name: Checkout openclaw PR branch (fork)
         uses: actions/checkout@v4
         with:
           repository: SunnyShu0925/openclaw
-          ref: ${{ github.event.inputs.pr_branch }}
+          ref: ${{ matrix.ref }}
           path: openclaw
+          fetch-depth: 1
+
+      - name: Verify exact production revision
+        working-directory: openclaw
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ matrix.ref }}"
+          git show --format= --stat HEAD
+
+      - name: Install production Host proof test
+        run: |
+          cp proof/apps/macos/Tests/OpenClawIPCTests/PR182627ProductionHostTests.swift \
+            openclaw/apps/macos/Tests/OpenClawIPCTests/
 
       - name: Toolchain
         run: |
@@ -41,25 +71,36 @@ jobs:
         run: |
           node scripts/prepare-apple-mermaid.mjs
 
-      - name: Run real native WKWebView bridge XCTest (post-fix head)
+      - name: Run production Host ACK proof
         working-directory: openclaw
         continue-on-error: true
         run: |
           which node
           node -v
-          swift test --package-path apps/macos --filter NativeConversationBridgeTests 2>&1 | tee /tmp/postfix.log
+          swift test --package-path apps/macos --filter PR182627ProductionHostTests 2>&1 | tee "/tmp/${{ matrix.version }}.log"
           echo "PROOF_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
 
       - name: Collect
         if: always()
         run: |
-          echo "=== POST-FIX tail ==="
-          tail -40 /tmp/postfix.log 2>/dev/null || true
+          grep -F '[PR182627Host]' "/tmp/${{ matrix.version }}.log" || true
+          tail -40 "/tmp/${{ matrix.version }}.log" || true
+
+      - name: Enforce expected parent/head verdict
+        env:
+          PROOF_VERSION: ${{ matrix.version }}
+        run: |
+          log="/tmp/$PROOF_VERSION.log"
+          if [[ "$PROOF_VERSION" == "parent" ]]; then
+            grep -F 'VERDICT:FAILED:timeout' "$log"
+          else
+            grep -F 'VERDICT:SUCCEEDED' "$log"
+            grep -F 'pending after all=0' "$log"
+            grep -F 'clock Date.now delta=60000ms' "$log"
+          fi
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: macos-native-xctest-logs
-          path: |
-            /tmp/postfix.log
-            /tmp/prefix.log
+          name: production-host-${{ matrix.version }}
+          path: /tmp/${{ matrix.version }}.log
