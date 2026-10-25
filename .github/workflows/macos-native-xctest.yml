@@ -28,6 +28,7 @@ jobs:
       - name: Checkout production Host proof harness
         uses: actions/checkout@v4
         with:
+          repository: SunnyShu0925/oc-macos-proof
           ref: ${{ inputs.proof_ref }}
           path: proof
 
