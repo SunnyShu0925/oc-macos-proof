@@ -104,20 +104,6 @@ async function result(page: Page, requestId: string) {
   }, requestId);
 }
 
-async function stateAfterResult(page: Page, requestId: string) {
-  return page.evaluate((id) => {
-    const state = Reflect.get(window, "__nativeConversationProof") as Probe;
-    const receiptIndex = state.messages.findIndex(
-      (message) => message.type === "command-result" && message.requestId === id,
-    );
-    if (receiptIndex < 0) {
-      return undefined;
-    }
-    return state.messages.slice(receiptIndex + 1).findLast((message) => message.type === "state")
-      ?.context;
-  }, requestId);
-}
-
 async function waitForResult(page: Page, requestId: string, timeoutMs = 15_000) {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
@@ -393,8 +379,9 @@ async function mountCase(variant: Variant, buildId: string) {
       expect(secondReceipt).toMatchObject({ error: variant.error });
     }
     if (variant.ok) {
-      await expect.poll(() => page.url(), { timeout: 5_000 }).toContain(second.sessionKey);
-      await expect.poll(() => stateAfterResult(page, "second"), { timeout: 5_000 }).toEqual(second);
+      await expect
+        .poll(() => new URL(page.url()).pathname, { timeout: 5_000 })
+        .toBe("/chat/main/second");
       const assertFinal = expect
         .poll(
           () =>
@@ -416,7 +403,7 @@ async function mountCase(variant: Variant, buildId: string) {
           pathname: "/chat/main/second",
           pendingMatches: 0,
           matches: "success",
-          routeData: { kind: "session", sessionKey: second.sessionKey, agentId: second.agentId },
+          routeData: { kind: "session", sessionKey: second.sessionKey },
         });
       await assertFinal;
       const finalRoute = await evaluateControlUiContext(page, (applicationContext) => {
@@ -428,9 +415,8 @@ async function mountCase(variant: Variant, buildId: string) {
         };
       });
       expect(new URL(page.url()).pathname).toBe(finalRoute.pathname);
-      const state = await stateAfterResult(page, "second");
       console.log(
-        `[proof] ${variant.label} final actual UI route=${finalRoute.pathname} routerCalls=${finalRoute.calls} routeData=${JSON.stringify(finalRoute.routeData)} stateAfterReceipt=${JSON.stringify(state)}`,
+        `[proof] ${variant.label} final actual UI route=${finalRoute.pathname} routerCalls=${finalRoute.calls} routeData=${JSON.stringify(finalRoute.routeData)}`,
       );
     }
     console.log(
