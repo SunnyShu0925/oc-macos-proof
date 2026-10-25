@@ -60,20 +60,22 @@ jobs:
           test "$(git -C pre rev-parse HEAD)" = "$PR182627_HEAD"
           test "$(git -C harness rev-parse HEAD)" = "$PR182627_HARNESS"
           file=ui/src/app/native-conversation-bridge.ts
+          test_file=ui/src/app/native-conversation-running-ui.browser.test.ts
+          config_file=ui/vitest.config.ts
           for checkout in post pre; do
             test -f "$checkout/$file"
             test -f "$checkout/ui/test-helpers/control-ui-e2e.ts"
             test -f "$checkout/ui/vitest.config.ts"
             test -d "$checkout/apps/macos/Tests/OpenClawIPCTests"
           done
-          git -C post show "$PR182627_HEAD^:$file" > pre/$file
+          git -C post show "$PR182627_HEAD^:$file" > pre/"$file"
           grep -q 'deadline = performance.now()' post/$file
           grep -q 'deadline = Date.now()' pre/$file
           diff -u post/$file pre/$file > "$GITHUB_WORKSPACE/bridge.diff" || true
           cp harness/.github/workflows/native-conversation-running-ui.browser.test.ts \
-            post/ui/src/app/native-conversation-running-ui.browser.test.ts
+            "post/$test_file"
           cp harness/.github/workflows/native-conversation-running-ui.browser.test.ts \
-            pre/ui/src/app/native-conversation-running-ui.browser.test.ts
+            "pre/$test_file"
           for checkout in post pre; do
             node -e '
               const fs = require("fs");
@@ -88,20 +90,23 @@ jobs:
                 fs.writeFileSync(file, source.replace(marker, marker + entry));
               }
             ' \
-            "$checkout/ui/vitest.config.ts"
+            "$checkout/$config_file"
           done
           git -C post status --short > "$GITHUB_WORKSPACE/post.status"
           git -C pre status --short > "$GITHUB_WORKSPACE/pre.status"
           status_ok=1
-          for path in \
-            "ui/src/app/native-conversation-bridge.ts" \
-            "ui/src/app/native-conversation-running-ui.browser.test.ts" \
-            "ui/vitest.config.ts"; do
-            if test -z "$(git -C post status --short -- "$path")" ||
-              test -z "$(git -C pre status --short -- "$path")"; then
-              echo "Expected proof change missing: $path" >&2
-              status_ok=0
-            fi
+          for path in "$file" "$test_file" "$config_file"; do
+            for checkout in post pre; do
+              if test -z "$(git -C "$checkout" status --short -- "$path")"; then
+                echo "Expected proof change missing: $checkout/$path" >&2
+                status_ok=0
+              fi
+              if test "$(git -C "$checkout" diff --numstat -- "$path" |
+                wc -l)" -ne 1; then
+                echo "Unexpected tracked changes: $checkout/$path" >&2
+                status_ok=0
+              fi
+            done
           done
           if test "$status_ok" -ne 1; then
             echo "Proof checkouts do not match the intended patch." >&2
@@ -112,9 +117,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/bridge.diff" "$GITHUB_WORKSPACE/tree.diff"
           : > "$GITHUB_WORKSPACE/proof-harness.diff"
           comparison_ok=1
-          for path in \
-            "ui/src/app/native-conversation-running-ui.browser.test.ts" \
-            "ui/vitest.config.ts"; do
+          for path in "$test_file" "$config_file"; do
             set +e
             diff -u "post/$path" "pre/$path" >> "$GITHUB_WORKSPACE/proof-harness.diff"
             comparison_status=$?
