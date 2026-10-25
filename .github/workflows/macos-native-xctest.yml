@@ -10,7 +10,6 @@ on:
       proof_ref:
         description: Exact proof harness revision
         required: true
-        default: 4f5489cb78a9b7f5b1eeda3c60392530d2f1a4aa
 
 jobs:
   production-host:
@@ -32,19 +31,17 @@ jobs:
           ref: ${{ inputs.proof_ref }}
           path: proof
 
-      - name: Checkout openclaw PR branch (fork)
-        uses: actions/checkout@v4
-        with:
-          repository: SunnyShu0925/openclaw
-          ref: ${{ matrix.ref }}
-          path: openclaw
-          fetch-depth: 1
-
       - name: Verify exact production revision
-        working-directory: openclaw
+        env:
+          PR_REF: ${{ matrix.ref }}
         run: |
-          test "$(git rev-parse HEAD)" = "${{ matrix.ref }}"
-          git show --format= --stat HEAD
+          git init openclaw
+          git -C openclaw remote add origin \
+            https://github.com/SunnyShu0925/openclaw
+          git -C openclaw fetch --depth 1 origin "$PR_REF"
+          git -C openclaw checkout --detach FETCH_HEAD
+          test "$(git -C openclaw rev-parse HEAD)" = "$PR_REF"
+          git -C openclaw show --format= --stat HEAD
 
       - name: Install production Host proof test
         run: |
@@ -84,20 +81,51 @@ jobs:
       - name: Collect
         if: always()
         run: |
+          test -f "/tmp/${{ matrix.version }}.log" || exit 1
           grep -F '[PR182627Host]' "/tmp/${{ matrix.version }}.log" || true
           tail -40 "/tmp/${{ matrix.version }}.log" || true
 
       - name: Enforce expected parent/head verdict
         env:
           PROOF_VERSION: ${{ matrix.version }}
+          PRODUCTION_SHA: ${{ matrix.ref }}
         run: |
           log="/tmp/$PROOF_VERSION.log"
+          provenance=$(mktemp "/tmp/production-host-$PROOF_VERSION-provenance.XXXXXX.json")
+          gh api "repos/openclaw/openclaw/actions/runs/$GITHUB_RUN_ID" > "$provenance"
+          test "$(jq -r .head_sha "$provenance")" = "$PRODUCTION_SHA"
+          test "$(grep -cF 'events=1' "$log")" -eq 2
+          test "$(grep -cF 'gateway emulator=0' "$log")" -eq 2
+          test "$(grep -cF 'request-response fixtures=6' "$log")" -eq 2
+          test "$(grep -cF 'identity=ready' "$log")" -eq 2
           if [[ "$PROOF_VERSION" == "parent" ]]; then
-            grep -F 'VERDICT:FAILED:timeout' "$log"
+            test "$(grep -cF 'VERDICT:START' "$log")" -eq 1
+            grep -F 'first request=pr182627-first host=ok=true error=none' "$log"
+            grep -F 'second request=pr182627-second queued=true' "$log"
+            grep -F 'following request=pr182627-third queued=true' "$log"
+            grep -F 'first native ok=true error=none' "$log"
+            grep -F 'first bridge-result host=ok=true error=none' "$log"
+            grep -F 'following host=ok=true error=none native ok=true' "$log"
+            test "$(grep -cF 'VERDICT:FAILED:timeout' "$log")" -eq 1
+            test "$(grep -cF 'VERDICT:SUCCEEDED' "$log")" -eq 0
+            test "$(grep -cF 'second host=' "$log")" -eq 0
+            test "$(grep -cF 'pending after all=' "$log")" -eq 0
           else
-            grep -F 'VERDICT:SUCCEEDED' "$log"
+            test "$(grep -cF 'VERDICT:START' "$log")" -eq 1
+            grep -F 'first request=pr182627-first host=ok=true error=none' "$log"
+            grep -F 'second request=pr182627-second queued=true' "$log"
+            grep -F 'following request=pr182627-third queued=true' "$log"
+            grep -F 'first native ok=true error=none' "$log"
+            grep -F 'first bridge-result host=ok=true error=none' "$log"
+            grep -F 'following host=ok=true error=none native ok=true' "$log"
+            grep -F 'second navigate started after first host ack' "$log"
+            grep -F 'second host=ok=true error=none' "$log"
+            grep -F 'second native ok=true error=none' "$log"
             grep -F 'pending after all=0' "$log"
             grep -F 'clock Date.now delta=60000ms' "$log"
+            test "$(grep -cF 'commands=3; firstHost=false; firstBridge=false' "$log")" -eq 1
+            test "$(grep -cF 'VERDICT:SUCCEEDED' "$log")" -eq 1
+            test "$(grep -cF 'VERDICT:FAILED:' "$log")" -eq 0
           fi
 
       - uses: actions/upload-artifact@v4
