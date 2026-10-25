@@ -104,6 +104,20 @@ async function result(page: Page, requestId: string) {
   }, requestId);
 }
 
+async function stateAfterResult(page: Page, requestId: string) {
+  return page.evaluate((id) => {
+    const state = Reflect.get(window, "__nativeConversationProof") as Probe;
+    const receiptIndex = state.messages.findIndex(
+      (message) => message.type === "command-result" && message.requestId === id,
+    );
+    if (receiptIndex < 0) {
+      return undefined;
+    }
+    return state.messages.slice(receiptIndex + 1).findLast((message) => message.type === "state")
+      ?.context;
+  }, requestId);
+}
+
 async function waitForResult(page: Page, requestId: string, timeoutMs = 15_000) {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
@@ -196,7 +210,9 @@ async function mountCase(variant: Variant, buildId: string) {
           console.log(`[proof] actual router navigate call=${call} to=${to}`);
           if (call === 1) {
             await new Promise<void>((resolve) => {
-              globalThis.setTimeout(resolve, 2_000);
+              Object.assign(probeState, {
+                releaseFirstRouterNavigation: resolve,
+              });
             });
           }
           return original.call(applicationContext, routeId, options);
@@ -204,6 +220,152 @@ async function mountCase(variant: Variant, buildId: string) {
       });
     });
     await command(page, first, "first", variant.label);
+    await page.waitForFunction(
+      () => {
+        const state = Reflect.get(window, "__nativeConversationProof") as Probe;
+        return (
+          state.routerNavigations === 1 &&
+          typeof Reflect.get(state, "releaseFirstRouterNavigation") === "function"
+        );
+      },
+      undefined,
+      { polling: 25, timeout: 10_000 },
+    );
+    expect(await result(page, "first")).toBeUndefined();
+    console.log(
+      `[proof] ${variant.label} first command entered actual router; router calls=1 release=deferred`,
+    );
+
+    const fakeGatewayConsole: string[] = [];
+    page.on("console", (message) => {
+      const text = message.text();
+      if (text.includes("fake WebSocket not implemented")) {
+        fakeGatewayConsole.push(text);
+      }
+    });
+    await command(page, second, "second", variant.label);
+    const queuedAt = performance.now();
+    const queued = await page.evaluate(async () => {
+      const route = await new Promise<{
+        calls: number;
+        pathname: string;
+        pendingMatches: number;
+        matches: string | undefined;
+      }>((resolve) => {
+        const target = document.querySelector("openclaw-app-shell");
+        if (!target) {
+          throw new Error("Control UI shell is unavailable");
+        }
+        target.dispatchEvent(
+          Object.assign(new Event("context-request", { bubbles: true, composed: true }), {
+            context: "openclaw.application",
+            contextTarget: target,
+            subscribe: false,
+            callback: (application: {
+              router: {
+                getState(): {
+                  location: { pathname: string };
+                  pendingMatches: unknown[];
+                  matches: Array<{ status?: string }>;
+                };
+              };
+            }) => {
+              const state = application.router.getState();
+              resolve({
+                calls: (Reflect.get(window, "__nativeConversationProof") as Probe)
+                  .routerNavigations,
+                pathname: state.location.pathname,
+                pendingMatches: state.pendingMatches.length,
+                matches: state.matches[0]?.status,
+              });
+            },
+          }),
+        );
+      });
+      const state = Reflect.get(window, "__nativeConversationProof") as Probe;
+      return {
+        route,
+        firstReceipt: state.messages.some(
+          (message) => message.type === "command-result" && message.requestId === "first",
+        ),
+        secondReceipt: state.messages.some(
+          (message) => message.type === "command-result" && message.requestId === "second",
+        ),
+      };
+    });
+    expect(queued).toEqual({
+      route: {
+        calls: 1,
+        pathname: "/chat/main/first",
+        pendingMatches: 0,
+        matches: "success",
+      },
+      firstReceipt: false,
+      secondReceipt: false,
+    });
+    console.log(
+      `[proof] ${variant.label} second command queued behind first actual router call: router calls=1 first receipt=none second receipt=none route=${queued.route.pathname}`,
+    );
+    const jump = await page.evaluate(() => {
+      const state = Reflect.get(window, "__nativeConversationProof") as Probe;
+      const performanceBefore = performance.now();
+      const wallBefore = Date.now();
+      state.dateJumpMs = 60_000;
+      return {
+        wallDelta: Date.now() - wallBefore,
+        performanceDelta: performance.now() - performanceBefore,
+      };
+    });
+    console.log(
+      `[proof] ${variant.label} wall jump Date.now delta=${jump.wallDelta}ms performance.now delta=${jump.performanceDelta.toFixed(1)}ms`,
+    );
+    expect(jump.wallDelta).toBe(60_000);
+    expect(jump.performanceDelta).toBeLessThan(500);
+
+    await sleep(1_500);
+    const held = await page.evaluate(() => {
+      const state = Reflect.get(window, "__nativeConversationProof") as Probe;
+      return {
+        routerCalls: state.routerNavigations,
+        firstReceipt: state.messages.some(
+          (message) => message.type === "command-result" && message.requestId === "first",
+        ),
+        secondReceipt: state.messages
+          .filter((message) => message.type === "command-result" && message.requestId === "second")
+          .map((message) => message.error ?? "ok"),
+      };
+    });
+    expect(held).toEqual({
+      routerCalls: 1,
+      firstReceipt: false,
+      secondReceipt: [],
+    });
+    const queueHeldMs = Math.round(performance.now() - queuedAt);
+    expect(queueHeldMs).toBeGreaterThanOrEqual(1_450);
+    const queuedRouter = await evaluateControlUiContext(page, (applicationContext) => ({
+      calls: (Reflect.get(window, "__nativeConversationProof") as Probe).routerNavigations,
+      pathname: applicationContext.router.getState().location.pathname,
+    }));
+    expect(queuedRouter).toEqual({ calls: 1, pathname: "/chat/main/first" });
+    console.log(
+      `[proof] ${variant.label} queue held ${queueHeldMs}ms: first actual router call still gated; second receipt=none`,
+    );
+    if (fakeGatewayConsole.length > 0) {
+      console.log(
+        `[proof] ${variant.label} browser gateway diagnostics=${JSON.stringify(fakeGatewayConsole)}`,
+      );
+    }
+    expect(fakeGatewayConsole).toEqual([]);
+    const released = await page.evaluate(() => {
+      const state = Reflect.get(window, "__nativeConversationProof") as Probe;
+      const release = Reflect.get(state, "releaseFirstRouterNavigation");
+      if (typeof release !== "function") {
+        throw new Error("First router navigation release is unavailable");
+      }
+      release();
+      return true;
+    });
+    expect(released).toBe(true);
     const firstReceipt = await waitForResult(page, "first");
     expect(firstReceipt).toMatchObject({ ok: true });
     const firstRouter = await evaluateControlUiContext(page, (applicationContext) => {
@@ -222,62 +384,13 @@ async function mountCase(variant: Variant, buildId: string) {
       matches: "success",
     });
     console.log(
-      `[proof] ${variant.label} first command receipt=${JSON.stringify(firstReceipt)} router call=${firstRouter.calls} settled route=${firstRouter.pathname}`,
+      `[proof] ${variant.label} first receipt=${JSON.stringify(firstReceipt)} router calls=${firstRouter.calls} route=${firstRouter.pathname}`,
     );
-
-    const fakeGatewayConsole: string[] = [];
-    page.on("console", (message) => {
-      const text = message.text();
-      if (text.includes("fake WebSocket not implemented")) {
-        fakeGatewayConsole.push(text);
-      }
-    });
-    const firstStateWaitStarted = performance.now();
-    await command(page, second, "second", variant.label);
-    const queuedAt = performance.now();
-    expect(await result(page, "second")).toBeUndefined();
-    const queuedRouter = await evaluateControlUiContext(page, (applicationContext) => ({
-      calls: (Reflect.get(window, "__nativeConversationProof") as Probe).routerNavigations,
-      pathname: applicationContext.router.getState().location.pathname,
-    }));
-    expect(queuedRouter).toEqual({ calls: 1, pathname: "/chat/main/first" });
-    const jump = await page.evaluate(() => {
-      const state = Reflect.get(window, "__nativeConversationProof") as Probe;
-      const performanceBefore = performance.now();
-      const wallBefore = Date.now();
-      state.dateJumpMs = 60_000;
-      return {
-        wallDelta: Date.now() - wallBefore,
-        performanceDelta: performance.now() - performanceBefore,
-      };
-    });
-    console.log(
-      `[proof] ${variant.label} wall jump Date.now delta=${jump.wallDelta}ms performance.now delta=${jump.performanceDelta.toFixed(1)}ms`,
-    );
-    expect(jump.wallDelta).toBe(60_000);
-    expect(jump.performanceDelta).toBeLessThan(500);
-
-    await sleep(1_500);
-    const secondRouter = await evaluateControlUiContext(page, (applicationContext) => ({
-      calls: (Reflect.get(window, "__nativeConversationProof") as Probe).routerNavigations,
-      pathname: applicationContext.router.getState().location.pathname,
-    }));
-    expect(secondRouter).toEqual({ calls: 1, pathname: "/chat/main/first" });
-    const queueHeldMs = Math.round(performance.now() - queuedAt);
-    expect(queueHeldMs).toBeGreaterThanOrEqual(1_450);
-    console.log(
-      `[proof] ${variant.label} queue held ${queueHeldMs}ms: first router call still gated; no second route or receipt`,
-    );
-    if (fakeGatewayConsole.length > 0) {
-      console.log(
-        `[proof] ${variant.label} browser gateway diagnostics=${JSON.stringify(fakeGatewayConsole)}`,
-      );
-    }
-    expect(fakeGatewayConsole).toEqual([]);
-    const secondReceipt = await waitForResult(page, "second", variant.ok ? 15_000 : 4_000);
+    const secondReceipt = (await result(page, "second")) as Record<string, unknown> | undefined;
+    expect(secondReceipt).toBeDefined();
     const receiptDelayMs = Math.round(performance.now() - queuedAt);
     console.log(
-      `[proof] ${variant.label} second receipt=${JSON.stringify(secondReceipt)} after first state ${Math.round(performance.now() - firstStateWaitStarted)}ms after queue ${receiptDelayMs}ms`,
+      `[proof] ${variant.label} second receipt=${JSON.stringify(secondReceipt)} ${receiptDelayMs}ms after queue`,
     );
     expect(secondReceipt).toMatchObject({ ok: variant.ok });
     if (variant.error) {
@@ -285,18 +398,15 @@ async function mountCase(variant: Variant, buildId: string) {
     }
     if (variant.ok) {
       await expect.poll(() => page.url(), { timeout: 5_000 }).toContain(second.sessionKey);
+      await expect.poll(() => stateAfterResult(page, "second"), { timeout: 5_000 }).toEqual(second);
       const final = await evaluateControlUiContext(page, (applicationContext) => {
         const route = applicationContext.router.getState();
-        const latestState = (
-          Reflect.get(window, "__nativeConversationProof") as Probe
-        ).messages.findLast((message) => message.type === "state");
         return {
           calls: (Reflect.get(window, "__nativeConversationProof") as Probe).routerNavigations,
           pathname: route.location.pathname,
           pendingMatches: route.pendingMatches.length,
           matches: route.matches[0]?.status,
           routeData: route.matches[0]?.data,
-          state: latestState?.context,
         };
       });
       expect(final).toMatchObject({
@@ -305,11 +415,11 @@ async function mountCase(variant: Variant, buildId: string) {
         pendingMatches: 0,
         matches: "success",
         routeData: { kind: "session", sessionKey: second.sessionKey, agentId: second.agentId },
-        state: second,
       });
       expect(new URL(page.url()).pathname).toBe(final.pathname);
+      const state = await stateAfterResult(page, "second");
       console.log(
-        `[proof] ${variant.label} final actual UI route=${final.pathname} routerCalls=${final.calls} routeData=${JSON.stringify(final.routeData)} latestState=${JSON.stringify(final.state)}`,
+        `[proof] ${variant.label} final actual UI route=${final.pathname} routerCalls=${final.calls} routeData=${JSON.stringify(final.routeData)} stateAfterReceipt=${JSON.stringify(state)}`,
       );
     }
     console.log(
