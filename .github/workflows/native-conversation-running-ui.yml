@@ -1,45 +1,50 @@
 name: Native conversation running UI proof (PR #182627)
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/native-conversation-running-ui.yml
-      - .github/workflows/native-conversation-running-ui.browser.test.ts
-  workflow_dispatch:
+  workflow_call:
     inputs:
       head:
         required: true
-        default: c7fb8202e193c22be02eee2ea280771d0d07f54f
+        type: string
       harness:
         required: true
-        default: main
+        type: string
+      native_head:
+        required: true
+        type: string
 
 jobs:
   proof:
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 75
     permissions:
       contents: read
+    env:
+      PR182627_HEAD: ${{ inputs.head }}
+      PR182627_HARNESS: ${{ inputs.harness }}
+      PR182627_NATIVE_HEAD: ${{ inputs.native_head }}
     steps:
       - uses: actions/checkout@v4
         with:
           repository: SunnyShu0925/openclaw
-          ref: ${{ inputs.head }}
+          ref: ${{ env.PR182627_HEAD }}
           path: post
           fetch-depth: 2
+          persist-credentials: false
       - uses: actions/checkout@v4
         with:
           repository: SunnyShu0925/openclaw
-          ref: ${{ inputs.head }}
+          ref: ${{ env.PR182627_HEAD }}
           path: pre
           fetch-depth: 2
+          persist-credentials: false
       - name: Checkout proof harness
         uses: actions/checkout@v4
         with:
           repository: SunnyShu0925/oc-macos-proof
-          ref: ${{ inputs.harness }}
+          ref: ${{ env.PR182627_HARNESS }}
           path: harness
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24.22.1
@@ -50,17 +55,28 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm --dir ui exec playwright install webkit
       - name: Prepare exact pre-fix checkout
+        env:
+          CHECKOUT_EXCLUDES: --exclude=node_modules --exclude=.git --exclude=.github
         run: |
-          test "$(git -C post rev-parse HEAD)" = "${{ inputs.head }}"
-          test "$(git -C pre rev-parse HEAD)" = "${{ inputs.head }}"
+          test "$(git -C post rev-parse HEAD)" = "$PR182627_HEAD"
+          test "$(git -C pre rev-parse HEAD)" = "$PR182627_HEAD"
+          test "$(git -C harness rev-parse HEAD)" = "$PR182627_HARNESS"
+          test -z "$(git -C post status --porcelain)"
+          test -z "$(git -C pre status --porcelain)"
           file=ui/src/app/native-conversation-bridge.ts
-          git -C post show "${{ inputs.head }}^:$file" > pre/$file
+          for checkout in post pre; do
+            test -f "$checkout/$file"
+            test -f "$checkout/ui/test-helpers/control-ui-e2e.ts"
+            test -f "$checkout/ui/vitest.config.ts"
+            test -d "$checkout/apps/macos/Tests/OpenClawIPCTests"
+          done
+          git -C post show "$PR182627_HEAD^:$file" > pre/$file
           grep -q 'deadline = performance.now()' post/$file
           grep -q 'deadline = Date.now()' pre/$file
           diff -u post/$file pre/$file > "$GITHUB_WORKSPACE/bridge.diff" || true
-          install -D harness/.github/workflows/native-conversation-running-ui.browser.test.ts \
+          cp harness/.github/workflows/native-conversation-running-ui.browser.test.ts \
             post/ui/src/app/native-conversation-running-ui.browser.test.ts
-          install -D harness/.github/workflows/native-conversation-running-ui.browser.test.ts \
+          cp harness/.github/workflows/native-conversation-running-ui.browser.test.ts \
             pre/ui/src/app/native-conversation-running-ui.browser.test.ts
           for checkout in post pre; do
             node -e '
@@ -82,7 +98,9 @@ jobs:
           git -C pre status --short > "$GITHUB_WORKSPACE/pre.status"
           diff -u post.status pre.status > "$GITHUB_WORKSPACE/tree.diff"
           test "$(wc -l < "$GITHUB_WORKSPACE/tree.diff")" -gt 0
-          diff -ru --exclude=node_modules --exclude=.git post pre > "$GITHUB_WORKSPACE/proof-harness.diff" || true
+          diff -ru $CHECKOUT_EXCLUDES post pre > "$GITHUB_WORKSPACE/proof-harness.diff" || true
+          test ! -s "$GITHUB_WORKSPACE/proof-harness.diff"
+          shasum post/ui/src/app/native-conversation-running-ui.browser.test.ts > "$GITHUB_WORKSPACE/harness.sha256"
           cat "$GITHUB_WORKSPACE/bridge.diff"
           cat "$GITHUB_WORKSPACE/tree.diff"
       - name: Install pre-fix dependencies
@@ -90,15 +108,19 @@ jobs:
         run: |
           corepack enable
           pnpm install --frozen-lockfile
+          pnpm --dir ui exec playwright install webkit
       - name: Production Control UI and WebKit environment
         working-directory: post
         run: |
-          echo "PR_HEAD=$(git rev-parse HEAD)"
-          echo "PR_PARENT=$(git rev-parse HEAD^)"
-          echo "RUNNER_OS=$RUNNER_OS RUNNER_IMAGE=$ImageOS RUNNER_ARCH=$RUNNER_ARCH"
-          node --version
-          pnpm --version
-          pnpm --dir ui exec playwright --version
+          {
+            echo "PR_HEAD=$(git rev-parse HEAD)"
+            echo "PR_PARENT=$(git rev-parse HEAD^)"
+            echo "HARNESS_HEAD=$(git -C ../harness rev-parse HEAD)"
+            echo "RUNNER_OS=$RUNNER_OS RUNNER_IMAGE=$ImageOS RUNNER_ARCH=$RUNNER_ARCH"
+            echo "NODE=$(node --version)"
+            echo "PNPM=$(pnpm --version)"
+            echo "PLAYWRIGHT=$(pnpm --dir ui exec playwright --version)"
+          } | tee "$GITHUB_WORKSPACE/environment.log"
       - name: Run post-fix WebKit proof
         working-directory: post
         env:
@@ -124,17 +146,33 @@ jobs:
             2>&1 | tee "$GITHUB_WORKSPACE/prefix.log"
           grep -q 'VERDICT:pre-fix:KILLED:navigate-timeout' "$GITHUB_WORKSPACE/prefix.log"
           grep -q 'wall jump Date.now delta=60000ms' "$GITHUB_WORKSPACE/prefix.log"
+      - name: Run exact native WKWebView handler XCTest
+        working-directory: post
+        env:
+          SWIFT_TEST_PACKAGE: apps/macos
+        run: |
+          test "$(git rev-parse HEAD)" = "$PR182627_NATIVE_HEAD"
+          swift --version
+          xcodebuild -version
+          node scripts/prepare-apple-mermaid.mjs
+          set -o pipefail
+          swift test --package-path "$SWIFT_TEST_PACKAGE" --filter NativeConversationBridgeTests \
+            2>&1 | tee "$GITHUB_WORKSPACE/native-xctest.log"
+          grep -q 'NativeConversationBridgeTests' "$GITHUB_WORKSPACE/native-xctest.log"
       - name: Verify proof trees and capture logs
         if: always()
         run: |
           {
             echo "PR_HEAD=$(git -C post rev-parse HEAD)"
             echo "PR_PARENT=$(git -C pre rev-parse HEAD^)"
+            echo "HARNESS_HEAD=$(git -C harness rev-parse HEAD)"
             echo "RUNNER_OS=$RUNNER_OS RUNNER_IMAGE=$ImageOS RUNNER_ARCH=$RUNNER_ARCH"
             echo "POST_GREP:"
             grep -E '\[proof\]|VERDICT|Tests ' postfix.log || true
             echo "PRE_GREP:"
             grep -E '\[proof\]|VERDICT|Tests ' prefix.log || true
+            echo "NATIVE_GREP:"
+            grep -E 'NativeConversationBridgeTests|Executed [0-9]+ test' native-xctest.log || true
             echo "PROOF_TREE_DIFF:"
             cat proof-harness.diff
           } | tee "$GITHUB_WORKSPACE/proof-summary.log"
@@ -146,8 +184,11 @@ jobs:
         with:
           name: native-conversation-running-ui-logs
           path: |
+            environment.log
+            harness.sha256
             postfix.log
             prefix.log
+            native-xctest.log
             proof-summary.log
             bridge.diff
             proof-harness.diff
