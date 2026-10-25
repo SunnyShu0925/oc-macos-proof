@@ -64,10 +64,14 @@ async function installHost(page: Page, version: string) {
   }, version);
 }
 
-async function command(page: Page, target: typeof first, requestId: string) {
+async function command(page: Page, target: typeof first, requestId: string, label: string) {
   await page.evaluate(
-    ({ targetSession, id }) => {
+    ({ targetSession, id, variantLabel }) => {
       const state = Reflect.get(window, "__nativeConversationProof") as Probe;
+      if (!state.documentId) {
+        throw new Error("Native conversation bridge did not publish a documentId");
+      }
+      console.log(`[proof] ${variantLabel} dispatch native command requestId=${id}`);
       window.dispatchEvent(
         new CustomEvent("openclaw:native-conversation-command", {
           detail: {
@@ -80,8 +84,25 @@ async function command(page: Page, target: typeof first, requestId: string) {
         }),
       );
     },
-    { targetSession: target, id: requestId },
+    { targetSession: target, id: requestId, variantLabel: label },
   );
+}
+
+async function waitForRequest(
+  page: Page,
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  after: number,
+) {
+  const deadline = performance.now() + 20_000;
+  while (performance.now() < deadline) {
+    const requests = await gateway.getRequests("chat.startup");
+    const request = requests[after];
+    if (request) {
+      return request;
+    }
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`No chat.startup RPC after request #${after}; page URL=${page.url()}`);
 }
 
 async function result(page: Page, requestId: string) {
@@ -136,20 +157,40 @@ async function mountCase(variant: Variant, buildId: string) {
     await page
       .locator(".chat-pane-cache__pane--visible .agent-chat__composer-combobox textarea")
       .waitFor();
+    await page.waitForFunction(
+      () => {
+        const state = Reflect.get(window, "__nativeConversationProof") as Probe;
+        const documentBinding = Reflect.get(window, "__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__");
+        return (
+          typeof state.documentId === "string" &&
+          state.documentId.length > 0 &&
+          typeof documentBinding === "object" &&
+          documentBinding !== null &&
+          Reflect.get(documentBinding, "documentId") === state.documentId
+        );
+      },
+      undefined,
+      { polling: 50, timeout: 20_000 },
+    );
+    console.log(
+      `[proof] ${variant.label} bridge ready documentId=${await page.evaluate(
+        () => (Reflect.get(window, "__nativeConversationProof") as Probe).documentId,
+      )}`,
+    );
     console.log(
       `[proof] ${variant.label} WebKit=${await browser.version()} initial = ${new URL(page.url()).pathname}`,
     );
 
     const firstIndex = (await gateway.getRequests("chat.startup")).length;
     expect(await gateway.deferNext("chat.startup")).toBe(firstIndex);
-    await command(page, first, "first");
-    const firstRequest = await gateway.waitForRequest("chat.startup", { after: firstIndex });
+    await command(page, first, "first", variant.label);
+    const firstRequest = await waitForRequest(page, gateway, firstIndex);
     expect(sessionKey(firstRequest.params)).toBe(first.sessionKey);
     console.log(
       `[proof] ${variant.label} actual router RPC #${firstIndex + 1} chat.startup session=${sessionKey(firstRequest.params)} (held)`,
     );
 
-    await command(page, second, "second");
+    await command(page, second, "second", variant.label);
     const queuedAt = performance.now();
     const receivedAt = Date.now();
     const leftoverBudgetMs = Math.max(0, 15_000 - (performance.now() - queuedAt));
@@ -200,9 +241,7 @@ async function mountCase(variant: Variant, buildId: string) {
     expect(jump.performanceDelta).toBeLessThan(500);
 
     await gateway.resolveDeferred("chat.startup");
-    const secondRequest = await gateway.waitForRequest("chat.startup", {
-      after: firstIndex + 1,
-    });
+    const secondRequest = await waitForRequest(page, gateway, firstIndex + 1);
     expect(sessionKey(secondRequest.params)).toBe(second.sessionKey);
     console.log(
       `[proof] ${variant.label} actual router RPC #${firstIndex + 2} chat.startup session=${sessionKey(secondRequest.params)}`,
