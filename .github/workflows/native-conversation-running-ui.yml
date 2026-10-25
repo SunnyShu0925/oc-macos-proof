@@ -216,17 +216,18 @@ jobs:
           grep -q 'VERDICT:pre-fix:KILLED:navigate-timeout' "$GITHUB_WORKSPACE/prefix.log"
           grep -q 'wall jump Date.now delta=60000ms' "$GITHUB_WORKSPACE/prefix.log"
       - name: Run exact native WKWebView handler XCTest
-        working-directory: post
+        working-directory: native
         env:
           SWIFT_TEST_PACKAGE: apps/macos
         run: |
-          test "$(git rev-parse HEAD)" = "$PR182627_NATIVE_HEAD"
+          test "$(git rev-parse HEAD)" = "$PR182627_NATIVE_REF"
           swift --version
           xcodebuild -version
           set -o pipefail
           swift test --package-path "$SWIFT_TEST_PACKAGE" --filter NativeConversationBridgeTests \
             2>&1 | tee "$GITHUB_WORKSPACE/native-xctest.log"
-          grep -q 'NativeConversationBridgeTests' "$GITHUB_WORKSPACE/native-xctest.log"
+          grep -q 'NativeConversationBridgeTests.*passed' "$GITHUB_WORKSPACE/native-xctest.log"
+          grep -Eq 'Executed 5 tests?, with 0 failures' "$GITHUB_WORKSPACE/native-xctest.log"
       - name: Verify proof trees and capture logs
         if: always()
         run: |
