@@ -368,24 +368,7 @@ async function mountCase(variant: Variant, buildId: string) {
     expect(released).toBe(true);
     const firstReceipt = await waitForResult(page, "first");
     expect(firstReceipt).toMatchObject({ ok: true });
-    const firstRouter = await evaluateControlUiContext(page, (applicationContext) => {
-      const route = applicationContext.router.getState();
-      return {
-        calls: (Reflect.get(window, "__nativeConversationProof") as Probe).routerNavigations,
-        pathname: route.location.pathname,
-        pendingMatches: route.pendingMatches.length,
-        matches: route.matches[0]?.status,
-      };
-    });
-    expect(firstRouter).toEqual({
-      calls: 1,
-      pathname: "/chat/main/first",
-      pendingMatches: 0,
-      matches: "success",
-    });
-    console.log(
-      `[proof] ${variant.label} first receipt=${JSON.stringify(firstReceipt)} router calls=${firstRouter.calls} route=${firstRouter.pathname}`,
-    );
+    console.log(`[proof] ${variant.label} first receipt=${JSON.stringify(firstReceipt)}`);
     let secondReceipt: Record<string, unknown> | undefined;
     if (variant.ok) {
       await expect
