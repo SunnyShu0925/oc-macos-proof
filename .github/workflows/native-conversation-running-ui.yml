@@ -115,12 +115,14 @@ jobs:
             "$checkout/$config_file"
             echo "config ready $checkout"
           done
-          git -C post status --short > "$GITHUB_WORKSPACE/post.status"
+          git -C post status --short -- "$file" "$test_file" "$config_file" \
+            > "$GITHUB_WORKSPACE/post.status"
           echo 'post status ready'
-          git -C pre status --short > "$GITHUB_WORKSPACE/pre.status"
+          git -C pre status --short -- "$file" "$test_file" "$config_file" \
+            > "$GITHUB_WORKSPACE/pre.status"
           echo 'pre status ready'
           status_ok=1
-          for path in "$file" "$test_file" "$config_file"; do
+          for path in "$file" "$config_file"; do
             for checkout in post pre; do
               if test -z "$(git -C "$checkout" status --short -- "$path")"; then
                 echo "Expected proof change missing: $checkout/$path"
@@ -132,6 +134,13 @@ jobs:
                 status_ok=0
               fi
             done
+          done
+          for checkout in post pre; do
+            if ! git -C "$checkout" status --short -- "$test_file" |
+              grep -qx '?? '"$test_file"; then
+              echo "Expected proof fixture missing: $checkout/$test_file"
+              status_ok=0
+            fi
           done
           if test "$status_ok" -ne 1; then
             echo "Proof checkouts do not match the intended patch."
