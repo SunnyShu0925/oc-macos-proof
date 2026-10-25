@@ -95,10 +95,15 @@ jobs:
           git -C post status --short > "$GITHUB_WORKSPACE/post.status"
           git -C pre status --short > "$GITHUB_WORKSPACE/pre.status"
           cp "$GITHUB_WORKSPACE/bridge.diff" "$GITHUB_WORKSPACE/tree.diff"
+          : > "$GITHUB_WORKSPACE/proof-harness.diff"
           for path in \
             "ui/src/app/native-conversation-running-ui.browser.test.ts" \
             "ui/vitest.config.ts"; do
-            diff -u "post/$path" "pre/$path" >> "$GITHUB_WORKSPACE/proof-harness.diff" || true
+            if diff -u "post/$path" "pre/$path" >> "$GITHUB_WORKSPACE/proof-harness.diff"; then
+              :
+            elif test "$?" -ne 1; then
+              exit 1
+            fi
           done
           test ! -s "$GITHUB_WORKSPACE/proof-harness.diff"
           shasum post/ui/src/app/native-conversation-running-ui.browser.test.ts > "$GITHUB_WORKSPACE/harness.sha256"
