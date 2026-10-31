@@ -200,5 +200,8 @@ struct RowIdentityProbe {
         let seqs = store.events.map(\.seq)
         print("BUFFER ids=\(ids) seqs=\(seqs) uniqueIds=\(Set(ids).count) uniqueSeqs=\(Set(seqs).count)")
         print("PROBE_DONE mode=\(mode)")
+        // Leave the nested application run loop so the test process can exit.
+        NSApplication.shared.stop(nil)
+        try? await Task.sleep(for: .milliseconds(200))
     }
 }
