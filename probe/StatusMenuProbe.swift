@@ -126,7 +126,7 @@ struct StatusMenuProbe {
         try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
         let mode = ProcessInfo.processInfo.environment["PROBE_MODE"] ?? "unknown"
         print("PROBE mode=\(mode) outputDir=\(outputDir)")
-        try? await AppKitTestSupport.startApplication()
+        _ = AppKitTestSupport.application  // ensure NSApplication exists without entering UI loop
 
         let scenarios: [(String, String?, String?)] = [
             ("inherited", nil, nil),
@@ -159,80 +159,9 @@ struct StatusMenuProbe {
                 for line in self.submenuStates(item: item, identifier: identifier) { print(line) }
             }
 
-            // Capture the submenu window bitmap for visual before/after.
-            let states = self.captureMenuBitmap(item, to: "\(outputDir)/\(mode)-\(name).png")
-            print("CAPTURE \(name) \(states)")
-
             await fixture.close()
         }
 
         print("PROBE_DONE mode=\(mode)")
-        NSApplication.shared.stop(nil)
-        try? await Task.sleep(for: .milliseconds(200))
-    }
-
-    private func captureMenuBitmap(_ sessionItem: NSMenuItem, to path: String) -> String {
-        guard let submenu = sessionItem.submenu else { return "SKIP: no submenu" }
-        // Build a real window to host the submenu so AppKit can rasterize it.
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 420),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false)
-        window.isReleasedWhenClosed = false
-        let host = NSView(frame: window.contentView!.bounds)
-        host.autoresizingMask = [.width, .height]
-        window.contentView = host
-        window.makeKeyAndOrderFront(nil)
-        window.orderFrontRegardless()
-
-        // Pop the submenu briefly so its items realize state-column drawing; capture host.
-        submenu.popUp(positioning: nil, at: NSPoint(x: 8, y: 400), in: host)
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.15))
-        submenu.cancelTracking()
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
-
-        host.layoutSubtreeIfNeeded()
-        host.displayIfNeeded()
-        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
-            window.orderOut(nil)
-            window.close()
-            return "FAIL: no bitmap rep"
-        }
-        host.cacheDisplay(in: host.bounds, to: rep)
-        let ink = Self.inkRatio(rep)
-        let result: String
-        if ink > 0.01, let data = rep.representation(using: .png, properties: [:]) {
-            try? data.write(to: URL(fileURLWithPath: path))
-            result = "OK ink=\(String(format: "%.3f", ink)) bytes=\(data.count)"
-        } else {
-            result = "FAIL:blank ink=\(String(format: "%.3f", ink))"
-        }
-        window.orderOut(nil)
-        window.close()
-        return result
-    }
-
-    static func inkRatio(_ rep: NSBitmapImageRep) -> Double {
-        guard let data = rep.bitmapData else { return 0 }
-        let samples = rep.samplesPerPixel
-        let rowBytes = rep.bytesPerRow
-        let height = rep.pixelsHigh
-        let width = rep.pixelsWide
-        var ink = 0
-        var total = 0
-        for y in stride(from: 0, to: height, by: 2) {
-            let row = data.advanced(by: y * rowBytes)
-            for x in stride(from: 0, to: width, by: 2) {
-                let pixel = row.advanced(by: x * samples)
-                total += 1
-                if samples >= 4 {
-                    if pixel[3] > 8 { ink += 1 }
-                } else if pixel[0] > 8 {
-                    ink += 1
-                }
-            }
-        }
-        return total == 0 ? 0 : Double(ink) / Double(total)
     }
 }

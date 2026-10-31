@@ -92,6 +92,7 @@ jobs:
 
       - name: Run status menu probe
         working-directory: openclaw
+        timeout-minutes: 8
         continue-on-error: true
         env:
           PROBE_OUT_DIR: /tmp/probe-out
