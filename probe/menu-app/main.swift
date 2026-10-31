@@ -74,6 +74,21 @@ func dumpWindows(_ tag: String) {
     }
 }
 
+if CommandLine.arguments.contains("--open-submenu") {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        log("BEFORE_SUBMENU_POPUP")
+        NSApp.activate(ignoringOtherApps: true)
+        let timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            dumpWindows("submenu-tracking")
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        // Screen coordinates because the view is nil.
+        thinkingMenu.popUp(positioning: thinkingItem, at: NSPoint(x: 700, y: 520), in: nil)
+        log("AFTER_SUBMENU_POPUP")
+        timer.invalidate()
+    }
+}
+
 if CommandLine.arguments.contains("--open-menu") {
     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
         log("BEFORE_POPUP")

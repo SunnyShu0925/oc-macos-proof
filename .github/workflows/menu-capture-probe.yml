@@ -6,6 +6,11 @@ name: Menu capture feasibility probe
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: root or submenu
+        required: false
+        default: root
 
 jobs:
   probe:
@@ -36,7 +41,7 @@ jobs:
           sw_vers
           rm -f /tmp/appwin.txt
 
-          open /tmp/MenuProbe.app --args --open-menu
+          open /tmp/MenuProbe.app --args --open-${{ inputs.mode }}
           PID=""
           for i in $(seq 1 30); do
             PID=$(pgrep -f "MenuProbe.app/Contents/MacOS/MenuProbe" | head -1)
