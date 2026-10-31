@@ -3,6 +3,9 @@ import AppKit
 // Minimal status-bar app that mirrors the shipped menu shape: a status item
 // whose menu contains a "Thinking" submenu with one checked item, plus a
 // normal window used as a capture control.
+//
+// With --open-menu it forces the root menu on screen with NSMenu.popUp, so the
+// probe does not depend on accessibility clicks or on the app being frontmost.
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
@@ -50,6 +53,45 @@ window.contentView?.addSubview(label)
 window.makeKeyAndOrderFront(nil)
 window.orderFrontRegardless()
 
-print("MENU_PROBE_READY pid=\(ProcessInfo.processInfo.processIdentifier)")
-DispatchQueue.global().asyncAfter(deadline: .now() + 600) { exit(0) }
+func log(_ line: String) {
+    print(line)
+    if let data = (line + "\n").data(using: .utf8) {
+        let url = URL(fileURLWithPath: "/tmp/appwin.txt")
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(data)
+            try? handle.close()
+        } else {
+            try? data.write(to: url)
+        }
+    }
+}
+
+func dumpWindows(_ tag: String) {
+    log("APPWIN_DUMP \(tag) count=\(NSApp.windows.count) active=\(NSApp.isActive) policy=\(NSApp.activationPolicy().rawValue)")
+    for w in NSApp.windows {
+        log("APPWIN num=\(w.windowNumber) class=\(type(of: w)) visible=\(w.isVisible) frame=\(NSStringFromRect(w.frame))")
+    }
+}
+
+if CommandLine.arguments.contains("--open-menu") {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+        log("BEFORE_POPUP")
+        NSApp.activate(ignoringOtherApps: true)
+        dumpWindows("before-popup")
+        let timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            dumpWindows("tracking")
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        // Blocks in menu tracking until the menu is dismissed.
+        rootMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: statusItem.button)
+        log("AFTER_POPUP")
+        dumpWindows("after-popup")
+        timer.invalidate()
+    }
+}
+
+log("MENU_PROBE_READY pid=\(ProcessInfo.processInfo.processIdentifier)")
+dumpWindows("startup")
+DispatchQueue.global().asyncAfter(deadline: .now() + 900) { exit(0) }
 app.run()

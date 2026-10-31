@@ -34,10 +34,9 @@ jobs:
         run: |
           set +e
           sw_vers
-          echo "console user: $(stat -f '%Su' /dev/console)"
+          rm -f /tmp/appwin.txt
 
-          defaults write probe.menu.capture AppleEnabled -bool true || true
-          open /tmp/MenuProbe.app
+          open /tmp/MenuProbe.app --args --open-menu
           PID=""
           for i in $(seq 1 30); do
             PID=$(pgrep -f "MenuProbe.app/Contents/MacOS/MenuProbe" | head -1)
@@ -46,54 +45,19 @@ jobs:
           done
           echo "APP_PID=$PID"
           [ -n "$PID" ] || { echo "APP_NOT_RUNNING"; exit 1; }
-          sleep 3
-
-          /tmp/menu-probe windows "$PID" | tee /tmp/windows-before.txt
-
-          APP_PID="$PID" osascript proof/probe/open-probe-menu.applescript "$PID" 2>&1 | tee /tmp/ax-open.log
-          sleep 1
+          sleep 7
+          echo "=== app window dump ==="
+          cat /tmp/appwin.txt || true
 
           /tmp/menu-probe windows "$PID" | tee /tmp/windows-open.txt
 
-          python3 - <<'PY' > /tmp/targets.txt
-          import re
-          lines = open('/tmp/windows-open.txt').read().splitlines()
-          wins = []
-          for line in lines:
-              m = re.match(r'WIN num=(-?\d+) layer=(-?\d+) x=(-?[\d.]+) y=(-?[\d.]+) w=([\d.]+) h=([\d.]+)', line)
-              if m:
-                  wins.append(dict(num=int(m.group(1)), layer=int(m.group(2)), x=float(m.group(3)), y=float(m.group(4)), w=float(m.group(5)), h=float(m.group(6))))
-          menu = [w for w in wins if w['layer'] >= 100 and w['h'] > 45]
-          control = [w for w in wins if w['h'] > 150]
-          print('MENU_CANDIDATES=' + repr(menu))
-          print('CONTROL_CANDIDATES=' + repr(control))
-          env = ''
-          if menu:
-              best = max(menu, key=lambda w: w['h'])
-              env += 'MENU_WID=%d\n' % best['num']
-              env += 'MENU_RECT=%d,%d,%d,%d\n' % (best['x'], best['y'], best['w'], best['h'])
-          if control:
-              env += 'CONTROL_WID=%d\n' % max(control, key=lambda w: w['h'])['num']
-          open('/tmp/targets.env', 'w').write(env)
-          PY
-          cat /tmp/targets.txt
-          cat /tmp/targets.env 2>/dev/null || true
-
-          set -a
-          . /tmp/targets.env 2>/dev/null || true
-          set +a
           mkdir -p /tmp/shots
-
-          if [ -n "${MENU_WID:-}" ]; then
-            screencapture -x -o -l "$MENU_WID" /tmp/shots/menu-window.png; echo "MENU_WINDOW_SHOT=$? bytes=$(stat -f%z /tmp/shots/menu-window.png 2>/dev/null || echo 0)"
-          fi
-          if [ -n "${MENU_RECT:-}" ]; then
-            screencapture -x -R"$MENU_RECT" /tmp/shots/menu-region.png; echo "MENU_REGION_SHOT=$? bytes=$(stat -f%z /tmp/shots/menu-region.png 2>/dev/null || echo 0)"
-          fi
-          if [ -n "${CONTROL_WID:-}" ]; then
-            screencapture -x -o -l "$CONTROL_WID" /tmp/shots/control-window.png; echo "CONTROL_SHOT=$? bytes=$(stat -f%z /tmp/shots/control-window.png 2>/dev/null || echo 0)"
-          fi
-          screencapture -x /tmp/shots/full-screen.png; echo "FULL_SHOT=$? bytes=$(stat -f%z /tmp/shots/full-screen.png 2>/dev/null || echo 0)"
+          for NUM in $(grep -o 'APPWIN num=[0-9]*' /tmp/appwin.txt 2>/dev/null | cut -d= -f2 | sort -u); do
+            screencapture -x -o -l "$NUM" "/tmp/shots/win-$NUM.png"
+            echo "SHOT num=$NUM exit=$? bytes=$(stat -f%z /tmp/shots/win-$NUM.png 2>/dev/null || echo 0)"
+          done
+          screencapture -x /tmp/shots/full-screen.png
+          echo "FULL_SHOT bytes=$(stat -f%z /tmp/shots/full-screen.png 2>/dev/null || echo 0)"
 
           echo "=== stats ==="
           /tmp/menu-probe stats /tmp/shots/*.png
@@ -101,10 +65,10 @@ jobs:
           /tmp/menu-probe ocr /tmp/shots/*.png | tee /tmp/ocr.txt
 
           echo "=== feasibility verdict ==="
-          if grep -qE "Thinking|Off|Minimal|High" /tmp/ocr.txt; then
-            echo "MENU_PIXELS_CAPTURED=yes"
+          if grep -qE "Thinking" /tmp/ocr.txt; then
+            echo "MENU_TEXT_IN_CAPTURE=yes"
           else
-            echo "MENU_PIXELS_CAPTURED=no"
+            echo "MENU_TEXT_IN_CAPTURE=no"
           fi
 
       - name: Close menu and clean up
