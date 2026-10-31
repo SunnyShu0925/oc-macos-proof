@@ -173,7 +173,10 @@ jobs:
         run: |
           set -x
           defaults write "$APP_BUNDLE_ID" openclaw.debugPaneEnabled -bool true
+          defaults write "$APP_BUNDLE_ID" openclaw.onboardingSeen -bool true
+          defaults write "$APP_BUNDLE_ID" openclaw.onboardingVersion -int 8
           defaults read "$APP_BUNDLE_ID" openclaw.debugPaneEnabled
+          defaults read "$APP_BUNDLE_ID" openclaw.onboardingSeen
           pkill -f "OpenClaw.app/Contents/MacOS/OpenClaw" || true
           sleep 1
           open "$PWD/dist/OpenClaw.app" --args --attach-only --debug-open-menu
