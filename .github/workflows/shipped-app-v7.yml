@@ -1,0 +1,167 @@
+name: shipped-app-v7
+'on':
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: PR head branch
+        required: true
+        default: fix/agent-events-window-id-187608
+      mode:
+        description: head or base
+        required: true
+        default: head
+jobs:
+  proof:
+    runs-on: macos-latest
+    timeout-minutes: 150
+    steps:
+    - name: Checkout PR branch
+      uses: actions/checkout@v4
+      with:
+        repository: SunnyShu0925/openclaw
+        ref: ${{ inputs.pr_branch }}
+        path: openclaw
+    - name: Toolchain
+      run: 'sw_vers
+
+        swift --version
+
+        xcodebuild -version
+
+        '
+    - name: Setup Node + pnpm
+      run: 'corepack enable
+
+        node --version || true
+
+        '
+    - name: Install dependencies
+      working-directory: openclaw
+      timeout-minutes: 25
+      run: 'pnpm install --frozen-lockfile
+
+        '
+    - name: Prepare apple mermaid assets
+      working-directory: openclaw
+      run: node scripts/prepare-apple-mermaid.mjs
+    - name: Apply mode (base reverts the one-line fix)
+      working-directory: openclaw
+      env:
+        MODE: ${{ inputs.mode }}
+      run: "set -euo pipefail\nSRC=apps/macos/Sources/OpenClaw/AgentEventsWindow.swift\nif [ \"$MODE\" = \"base\" ]; then\n  python3 - \"$SRC\" <<'PY'\nimport sys, pathlib\np = pathlib.Path(sys.argv[1])\ns = p.read_text()\nif \"id: \\\\.id\" not in s:\n    raise SystemExit(\"expected id: \\\\.id in \" + str(p))\np.write_text(s.replace(\"id: \\\\.id\", \"id: \\\\.seq\"))\nprint(\"BASE mode: reverted to id: \\\\.seq\")\nPY\nfi\ngrep -n \"ForEach\" \"$SRC\" | head -3\n"
+    - name: Build plugin assets
+      working-directory: openclaw
+      timeout-minutes: 20
+      run: pnpm plugins:assets:build
+    - name: Package app (ad-hoc)
+      working-directory: openclaw
+      timeout-minutes: 60
+      env:
+        ALLOW_ADHOC_SIGNING: '1'
+        SIGN_IDENTITY: '-'
+        OPENCLAW_PACKAGE_APP_ROOT: ${{ github.workspace }}/openclaw/dist/OpenClaw.app
+      run: 'set -euo pipefail
+
+        mkdir -p "$HOME/.openclaw"
+
+        touch "$HOME/.openclaw/disable-launchagent"
+
+        ./scripts/package-mac-app.sh 2>&1 | tail -60
+
+        ls -la dist/OpenClaw.app/Contents/MacOS/
+
+        codesign -dv dist/OpenClaw.app 2>&1 | head -5 || true
+
+        '
+    - name: Write config + stub model + start Gateway
+      working-directory: openclaw
+      run: "set -euo pipefail\nmkdir -p \"$HOME/.openclaw\"\ncat > \"$HOME/.openclaw/openclaw.json\" <<'JSON'\n{\n  \"gateway\": { \"mode\": \"local\", \"port\": 18789, \"auth\": { \"mode\": \"none\" } },\n  \"models\": {\n    \"providers\": {\n      \"stub\": {\n        \"baseUrl\": \"http://127.0.0.1:18999/v1\",\n        \"api\": \"openai-completions\",\n        \"apiKey\": \"stub-key\",\n        \"models\": [\n          {\n            \"id\": \"stub-1\",\n            \"name\": \"Stub 1\",\n            \"compat\": {\n              \"supportsTools\": false,\n              \"requiresStringContent\": true,\n              \"strictMessageKeys\": true\n            }\n          }\n        ]\n      }\n    }\n  },\n  \"agents\": { \"defaults\": { \"model\": { \"primary\": \"stub/stub-1\" } }, \"entries\": { \"main\": {} } }\n}\nJSON\ncat > /tmp/stub-model.mjs <<'JS'\nimport http from \"node:http\";\nconst port = Number(process.env.STUB_PORT || 18999);\nconst server = http.createServer((req, res)\
+        \ => {\n  let body = \"\";\n  req.on(\"data\", (c) => { body += c; });\n  req.on(\"end\", () => {\n    if (req.url.startsWith(\"/v1/models\")) {\n      res.writeHead(200, { \"content-type\": \"application/json\" });\n      res.end(JSON.stringify({ object: \"list\", data: [{ id: \"stub-1\", object: \"model\" }] }));\n      return;\n    }\n    if (!req.url.includes(\"/chat/completions\")) {\n      res.writeHead(404); res.end(\"not found\"); return;\n    }\n    let parsed = {};\n    try { parsed = JSON.parse(body || \"{}\"); } catch {}\n    const id = \"chatcmpl-stub-\" + Date.now();\n    const created = Math.floor(Date.now() / 1000);\n    const model = parsed.model || \"stub-1\";\n    if (parsed.stream === false) {\n      res.writeHead(200, { \"content-type\": \"application/json\" });\n      res.end(JSON.stringify({\n        id, object: \"chat.completion\", created, model,\n        choices: [{ index: 0, message: { role: \"assistant\", content: \"stub reply\" }, finish_reason: \"stop\"\
+        \ }],\n        usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 }\n      }));\n      return;\n    }\n    res.writeHead(200, {\n      \"content-type\": \"text/event-stream\",\n      \"cache-control\": \"no-cache\",\n      connection: \"keep-alive\"\n    });\n    const chunk = (delta, finish = null) => \"data: \" + JSON.stringify({\n      id, object: \"chat.completion.chunk\", created, model,\n      choices: [{ index: 0, delta, finish_reason: finish }]\n    }) + \"\\n\\n\";\n    res.write(chunk({ role: \"assistant\", content: \"\" }));\n    res.write(chunk({ content: \"stub reply\" }));\n    res.write(chunk({}, \"stop\"));\n    res.write(\"data: [DONE]\\n\\n\");\n    res.end();\n  });\n});\nserver.listen(port, \"127.0.0.1\", () => console.log(\"stub model listening on \" + port));\nJS\npnpm openclaw doctor --fix > /tmp/doctor.log 2>&1 || true\ntail -25 /tmp/doctor.log || true\nnohup node /tmp/stub-model.mjs > /tmp/stub.log 2>&1 &\nnohup pnpm openclaw gateway run > /tmp/gateway.log\
+        \ 2>&1 &\nfor i in $(seq 1 120); do\n  if nc -z 127.0.0.1 18789 2>/dev/null; then\n    echo \"gateway port open after $((i*5))s\"; break\n  fi\n  sleep 5\ndone\nnc -z 127.0.0.1 18789 && echo \"PORT_OPEN\" || echo \"PORT_CLOSED_AFTER_WAIT\"\necho \"--- stub ---\"; tail -5 /tmp/stub.log || true\necho \"--- gateway ---\"; tail -30 /tmp/gateway.log || true\npnpm openclaw gateway status || true\npnpm openclaw models list 2>&1 | head -20 || true\n"
+    - name: Credential store diagnostics
+      working-directory: openclaw
+      continue-on-error: true
+      run: 'ls -la "$HOME/.openclaw" | head -20 || true
+
+        ls -la "$HOME/.openclaw/state" 2>/dev/null | head -10 || true
+
+        tail -30 /tmp/doctor.log || true
+
+        '
+    - name: Launch app (packaged bundle)
+      run: "set +e\n./dist/OpenClaw.app/Contents/MacOS/OpenClaw --attach-only --no-activate --background-only --debug-open-menu \\\n  > /tmp/app.log 2>&1 &\nsleep 25\npgrep -fl \"OpenClaw.app/Contents/MacOS/OpenClaw\" || echo \"APP_NOT_RUNNING\"\ntail -30 /tmp/app.log || true\n"
+    - name: Open Debug -> Open Agent Events (status menu)
+      continue-on-error: true
+      run: "cat > /tmp/menuclick.applescript <<'AS'\non run\n  tell application \"System Events\"\n    tell process \"OpenClaw\"\n      set out to \"\"\n      repeat with attempt from 1 to 10\n        try\n          set m to menu 1 of menu bar item 1 of menu bar 2\n          set out to out & \"MENU[\" & attempt & \"]=\" & (name of every menu item of m as string) & linefeed\n          repeat with itm in (menu items of m)\n            if (name of itm as string) is \"Debug\" then\n              click itm\n              delay 1\n              set sub to menu 1 of menu item \"Debug\" of m\n              set out to out & \"SUB=\" & (name of every menu item of sub as string) & linefeed\n              repeat with si in (menu items of sub)\n                if (name of si as string) starts with \"Open Agent Events\" then\n                  click si\n                  return out & \"CLICKED_OPEN_AGENT_EVENTS\"\n                end if\n              end repeat\n              return out & \"NO_EVENTS_ITEM\"\
+        \n            end if\n          end repeat\n          set out to out & \"NO_DEBUG_ITEM\" & linefeed\n        on error errMsg\n          set out to out & \"ERR[\" & attempt & \"]=\" & errMsg & linefeed\n        end try\n        delay 1\n      end repeat\n      return out\n    end tell\n  end tell\nend run\nAS\nosascript /tmp/menuclick.applescript 2>&1 | tee /tmp/menu.log || true\nif ! grep -q CLICKED_OPEN_AGENT_EVENTS /tmp/menu.log; then\n  echo \"--- fallback: real right-click on the status item ---\"\n  POS=$(osascript -e 'tell application \"System Events\" to tell process \"OpenClaw\" to get {position, size} of menu bar item 1 of menu bar 2' 2>&1)\n  echo \"status item geometry=$POS\"\n  cat > /tmp/rightclick.swift <<'SWIFT'\nimport CoreGraphics\nlet parts = CommandLine.arguments.dropFirst().first!.split(separator: \" \")\nlet x = Double(parts[0])!, y = Double(parts[1])!\nlet pt = CGPoint(x: x, y: y)\nlet src = CGEventSource(stateID: .hidSystemState)\nCGEvent(mouseEventSource:\
+        \ src, mouseType: .mouseMoved, mouseCursorPosition: pt, mouseButton: .right)!.post(tap: .cghidEventTap)\nusleep(200000)\nCGEvent(mouseEventSource: src, mouseType: .rightMouseDown, mouseCursorPosition: pt, mouseButton: .right)!.post(tap: .cghidEventTap)\nusleep(120000)\nCGEvent(mouseEventSource: src, mouseType: .rightMouseUp, mouseCursorPosition: pt, mouseButton: .right)!.post(tap: .cghidEventTap)\nSWIFT\n  CENTER=$(python3 - \"$POS\" <<'PY'\nimport re, sys\ns = sys.argv[1]\nnums = [int(n) for n in re.findall(r\"-?\\d+\", s)]\nif len(nums) >= 4:\n    print(nums[0] + nums[2] // 2, nums[1] + nums[3] // 2)\nPY\n)\n  echo \"click point=$CENTER\"\n  if [ -n \"$CENTER\" ]; then\n    swift /tmp/rightclick.swift \"$CENTER\" 2>&1 | tail -5\n    sleep 2\n    osascript /tmp/menuclick.applescript 2>&1 | tee -a /tmp/menu.log || true\n  fi\nfi\nsleep 2\nscreencapture -x /tmp/full-screen.png || true\nfile /tmp/full-screen.png || true\n"
+    - name: Agent turn A
+      working-directory: openclaw
+      continue-on-error: true
+      run: "pnpm openclaw agent --session-id events-a --message \"Reply with the single word: alpha\" --json \\\n  > /tmp/turn-a.json 2>/tmp/turn-a.err || true\nhead -30 /tmp/turn-a.json || true\ntail -10 /tmp/turn-a.err || true\nsleep 3\n"
+    - name: Agent turn B (window already open, same seq numbers)
+      working-directory: openclaw
+      continue-on-error: true
+      run: "pnpm openclaw agent --session-id events-b --message \"Reply with the single word: beta\" --json \\\n  > /tmp/turn-b.json 2>/tmp/turn-b.err || true\nhead -30 /tmp/turn-b.json || true\ntail -10 /tmp/turn-b.err || true\nsleep 5\n"
+    - name: Gateway + pairing diagnostics
+      continue-on-error: true
+      working-directory: openclaw
+      run: 'pnpm openclaw devices list --json > /tmp/devices.json 2>&1 || true
+
+        head -c 1200 /tmp/devices.json || true
+
+        pnpm openclaw gateway status > /tmp/gateway-status.txt 2>&1 || true
+
+        cat /tmp/gateway-status.txt || true
+
+        echo "--- gateway log ---"; tail -40 /tmp/gateway.log || true
+
+        echo "--- app log ---"; tail -40 /tmp/app.log || true
+
+        echo "--- os_log (OpenClaw) ---"
+
+        log show --last 12m --style compact --predicate ''process == "OpenClaw"'' 2>/dev/null | tail -60 || true
+
+        '
+    - name: Capture window + rows
+      run: "set +e\ncat > /tmp/windowid.swift <<'SWIFT'\nimport CoreGraphics\nlet list = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []\nfor w in list {\n  let owner = w[kCGWindowOwnerName as String] as? String ?? \"\"\n  if owner.contains(\"OpenClaw\") {\n    let b = w[kCGWindowBounds as String] as? [String: Any] ?? [:]\n    print(\"WINDOW owner=\\(owner) name=\\(w[kCGWindowName as String] ?? \"\") id=\\(w[kCGWindowNumber as String] ?? -1) bounds=\\(b[\"X\"] ?? 0),\\(b[\"Y\"] ?? 0),\\(b[\"Width\"] ?? 0),\\(b[\"Height\"] ?? 0)\")\n  }\n}\nSWIFT\nswift /tmp/windowid.swift 2>&1 | tee /tmp/windows.txt\nLINE=$(grep \"name=Agent Events\" /tmp/windows.txt | head -1)\nWID=$(echo \"$LINE\" | sed -n 's/.* id=\\([0-9-]*\\).*/\\1/p')\nRECT=$(echo \"$LINE\" | sed -n 's/.* bounds=\\([-0-9.,]*\\).*/\\1/p')\necho \"WID=$WID RECT=$RECT\"\nif [ -n \"$WID\" ]; then screencapture -x -o -l \"$WID\" /tmp/agent-events-window.png || true; fi\nfile /tmp/agent-events-window.png\
+        \ 2>/dev/null || true\nif [ ! -s /tmp/agent-events-window.png ] && [ -n \"$RECT\" ]; then\n  echo \"window capture missing; trying region capture\"\n  screencapture -x -R\"$RECT\" /tmp/agent-events-window.png || true\n  file /tmp/agent-events-window.png 2>/dev/null || true\nfi\nosascript <<'AS' 2>&1 | tee /tmp/rows.txt || true\ntell application \"System Events\"\n  tell process \"OpenClaw\"\n    if exists window \"Agent Events\" then\n      set out to \"\"\n      repeat with e in (entire contents of window \"Agent Events\")\n        try\n          if role of e is \"AXStaticText\" then set out to out & (value of e as text) & linefeed\n        end try\n      end repeat\n      return out\n    else\n      return \"NO_WINDOW\"\n    end if\n  end tell\nend tell\nAS\necho \"--- rows ---\"; cat /tmp/rows.txt || true\n"
+    - name: Collect
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: shipped-app-events-run-${{ inputs.mode }}
+        path: '/tmp/agent-events-window.png
+
+          /tmp/rows.txt
+
+          /tmp/windows.txt
+
+          /tmp/app.log
+
+          /tmp/gateway.log
+
+          /tmp/stub.log
+
+          /tmp/turn-a.json
+
+          /tmp/turn-a.err
+
+          /tmp/turn-b.json
+
+          /tmp/turn-b.err
+
+          /tmp/devices.json
+
+          /tmp/menu.log
+
+          /tmp/menu2.log
+
+          /tmp/full-screen.png
+
+          /tmp/gateway-status.txt
+
+          /tmp/doctor.log
+
+          '
