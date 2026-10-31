@@ -115,7 +115,7 @@ jobs:
                 }
               }
             },
-            "agents": { "defaults": { "model": "stub/stub-1" } }
+            "agents": { "defaults": { "model": { "primary": "stub/stub-1" } } }
           }
           JSON
           cat > /tmp/stub-model.mjs <<'JS'
@@ -167,7 +167,12 @@ jobs:
           JS
           nohup node /tmp/stub-model.mjs > /tmp/stub.log 2>&1 &
           nohup node openclaw.mjs gateway run > /tmp/gateway.log 2>&1 &
-          sleep 45
+          for i in $(seq 1 24); do
+            if node openclaw.mjs gateway status > /tmp/gateway-status.txt 2>&1; then
+              echo "gateway up after $((i*5))s"; break
+            fi
+            sleep 5
+          done
           echo "--- stub ---"; tail -5 /tmp/stub.log || true
           echo "--- gateway ---"; tail -30 /tmp/gateway.log || true
           node openclaw.mjs gateway status || true
