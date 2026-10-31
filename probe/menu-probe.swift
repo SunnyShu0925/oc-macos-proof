@@ -49,7 +49,8 @@ func ocr(_ paths: [String]) {
 
 func stats(_ paths: [String]) {
     for path in paths {
-        guard let rep = NSBitmapImageRep(contentsOf: URL(fileURLWithPath: path)) else {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let rep = NSBitmapImageRep(data: data) else {
             print("STATS_LOAD_FAIL \(path)")
             continue
         }
