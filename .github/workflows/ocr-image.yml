@@ -1,0 +1,22 @@
+name: OCR image
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Image URL
+        required: true
+jobs:
+  ocr:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          curl -sSL "${{ inputs.url }}" -o /tmp/image.png
+          file /tmp/image.png
+          swiftc -O proof/ocr-url.swift -o /tmp/ocr-url
+          /tmp/ocr-url /tmp/image.png | tee /tmp/ocr.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ocr
+          path: /tmp/ocr.txt
