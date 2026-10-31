@@ -188,6 +188,17 @@ jobs:
           pgrep -fl "OpenClaw.app/Contents/MacOS/OpenClaw" || echo "APP_NOT_RUNNING"
           tail -40 /tmp/app.log || true
 
+      - name: Gateway + pairing diagnostics
+        continue-on-error: true
+        working-directory: openclaw
+        run: |
+          node openclaw.mjs devices list --json > /tmp/devices.json 2>&1 || true
+          cat /tmp/devices.json || true
+          node openclaw.mjs gateway status > /tmp/gateway-status.txt 2>&1 || true
+          cat /tmp/gateway-status.txt || true
+          echo "--- gateway log ---"; tail -60 /tmp/gateway.log || true
+          echo "--- app log ---"; tail -60 /tmp/app.log || true
+
       - name: Agent turn A (before the window opens)
         working-directory: openclaw
         continue-on-error: true
@@ -283,3 +294,5 @@ jobs:
             /tmp/turn-a.err
             /tmp/turn-b.json
             /tmp/turn-b.err
+            /tmp/devices.json
+            /tmp/gateway-status.txt
