@@ -144,6 +144,31 @@ struct RowIdentityProbe {
         return lines
     }
 
+
+    static func makeWindow(width: CGFloat, height: CGFloat) -> (NSHostingView<AgentEventsWindow>, NSWindow) {
+        let host = NSHostingView(rootView: AgentEventsWindow())
+        host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false)
+        window.title = "Agent Events"
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        host.layoutSubtreeIfNeeded()
+        return (host, window)
+    }
+
+    static func tally(_ texts: [String]) -> String {
+        let joined = texts.joined(separator: "\n")
+        func count(_ needle: String) -> Int {
+            joined.components(separatedBy: needle).count - 1
+        }
+        return "run-a=\(count("run-a")) run-b=\(count("run-b")) ALPHA=\(count("ALPHA")) BETA=\(count("BETA"))"
+    }
+
     @Test
     func `probe window render`() async throws {
         let outputDir = ProcessInfo.processInfo.environment["PROBE_OUT_DIR"] ?? "/tmp/probe-out"
@@ -153,7 +178,6 @@ struct RowIdentityProbe {
 
         try await AppKitTestSupport.startApplication()
         let store = AgentEventStore.shared
-        store.clear()
 
         print("FOR_EACH_DUMP_BEGIN")
         let window = AgentEventsWindow()
@@ -162,45 +186,50 @@ struct RowIdentityProbe {
         for line in Self.forEachIdentity(body) { print(line) }
         print("FOR_EACH_DUMP_END")
 
-        // Stage 1: four rows from run-a.
+        // Scenario A: one row per run, both rows fit on screen.
+        store.clear()
+        store.append(Self.event(runId: "run-a", seq: 1, stream: "alpha"))
+        let (hostA, windowA) = Self.makeWindow(width: 640, height: 520)
+        try await Task.sleep(for: .milliseconds(700))
+        print("CAPTURE single-stage1 \(Self.writePNG(hostA, to: "\(outputDir)/\(mode)-single-stage1.png"))")
+        store.append(Self.event(runId: "run-b", seq: 1, stream: "beta"))
+        try await Task.sleep(for: .milliseconds(900))
+        hostA.layoutSubtreeIfNeeded()
+        print("CAPTURE single-stage2 \(Self.writePNG(hostA, to: "\(outputDir)/\(mode)-single-stage2.png"))")
+        let single = await Self.dumpAccessibility(hostA)
+        print("AX_TEXTS_BEGIN scenario=single")
+        for text in single { print(text) }
+        print("AX_SINGLE \(Self.tally(single))")
+        print("AX_TEXTS_END")
+        windowA.orderOut(nil)
+        windowA.close()
+
+        // Scenario B: four rows per run, all seq values collide.
+        store.clear()
         for seq in 1...4 {
             store.append(Self.event(runId: "run-a", seq: seq, stream: "alpha"))
         }
-        let host = NSHostingView(rootView: AgentEventsWindow())
-        host.frame = NSRect(x: 0, y: 0, width: 760, height: 700)
-        let appWindow = NSWindow(
-            contentRect: host.frame,
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false)
-        appWindow.title = "Agent Events"
-        appWindow.contentView = host
-        appWindow.makeKeyAndOrderFront(nil)
-        appWindow.orderFrontRegardless()
-        host.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(600))
-        print("CAPTURE stage1 \(Self.writePNG(host, to: "\(outputDir)/\(mode)-stage1.png"))")
-
-        // Stage 2: run-b restarts seq at 1, so all four seq values collide with run-a.
+        let (hostB, windowB) = Self.makeWindow(width: 760, height: 900)
+        try await Task.sleep(for: .milliseconds(700))
+        print("CAPTURE many-stage1 \(Self.writePNG(hostB, to: "\(outputDir)/\(mode)-many-stage1.png"))")
         for seq in 1...4 {
             store.append(Self.event(runId: "run-b", seq: seq, stream: "beta"))
         }
         try await Task.sleep(for: .milliseconds(900))
-        host.layoutSubtreeIfNeeded()
-        print("CAPTURE stage2 \(Self.writePNG(host, to: "\(outputDir)/\(mode)-stage2.png"))")
-
-        let texts = await Self.dumpAccessibility(host)
-        print("AX_TEXTS_BEGIN")
-        for text in texts { print(text) }
-        let joined = texts.joined(separator: "\n")
-        print("AX_TALLY run-a=\(joined.components(separatedBy: "run-a").count - 1) run-b=\(joined.components(separatedBy: "run-b").count - 1) ALPHA=\(joined.components(separatedBy: "ALPHA").count - 1) BETA=\(joined.components(separatedBy: "BETA").count - 1)")
+        hostB.layoutSubtreeIfNeeded()
+        print("CAPTURE many-stage2 \(Self.writePNG(hostB, to: "\(outputDir)/\(mode)-many-stage2.png"))")
+        let many = await Self.dumpAccessibility(hostB)
+        print("AX_TEXTS_BEGIN scenario=many")
+        for text in many { print(text) }
+        print("AX_MANY \(Self.tally(many))")
         print("AX_TEXTS_END")
+        windowB.orderOut(nil)
+        windowB.close()
 
         let ids = store.events.map(\.id)
         let seqs = store.events.map(\.seq)
         print("BUFFER ids=\(ids) seqs=\(seqs) uniqueIds=\(Set(ids).count) uniqueSeqs=\(Set(seqs).count)")
         print("PROBE_DONE mode=\(mode)")
-        // Leave the nested application run loop so the test process can exit.
         NSApplication.shared.stop(nil)
         try? await Task.sleep(for: .milliseconds(200))
     }
