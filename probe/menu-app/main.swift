@@ -82,8 +82,8 @@ if CommandLine.arguments.contains("--open-submenu") {
             dumpWindows("submenu-tracking")
         }
         RunLoop.main.add(timer, forMode: .common)
-        // Screen coordinates because the view is nil.
-        thinkingMenu.popUp(positioning: thinkingItem, at: NSPoint(x: 700, y: 520), in: nil)
+        // Anchor inside the window so the menu is fully on screen.
+        thinkingMenu.popUp(positioning: nil, at: NSPoint(x: 40, y: 60), in: window.contentView)
         log("AFTER_SUBMENU_POPUP")
         timer.invalidate()
     }
