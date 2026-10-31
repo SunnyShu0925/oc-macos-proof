@@ -75,7 +75,7 @@ jobs:
           ls -l /tmp/shot4
 
       - uses: actions/upload-artifact@v4
-        if: always
+        if: ${{ always() }}
         with:
           name: gui-capture-probe
           path: /tmp/shot4
