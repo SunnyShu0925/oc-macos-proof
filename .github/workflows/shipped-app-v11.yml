@@ -1,0 +1,319 @@
+name: shipped-app-events-v11
+'on':
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: PR head branch
+        required: true
+        default: fix/agent-events-window-id-187608
+      mode:
+        description: head or base
+        required: true
+        default: head
+jobs:
+  proof:
+    runs-on: macos-latest
+    timeout-minutes: 150
+    env:
+      APP_BUNDLE_ID: ai.openclaw.mac.debug
+      APP_EXEC: dist/OpenClaw.app/Contents/MacOS/OpenClaw
+    steps:
+      - name: Checkout proof harness
+        uses: actions/checkout@v4
+        with:
+          path: proof
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ inputs.pr_branch }}
+          path: openclaw
+      - name: Toolchain
+        run: |
+          sw_vers
+          swift --version
+          xcodebuild -version
+      - name: Setup Node + pnpm
+        run: |
+          corepack enable
+          node --version || true
+      - name: Install dependencies
+        working-directory: openclaw
+        timeout-minutes: 25
+        run: pnpm install --frozen-lockfile
+      - name: Prepare apple mermaid assets
+        working-directory: openclaw
+        run: node scripts/prepare-apple-mermaid.mjs
+      - name: Apply mode (base reverts the one-line fix)
+        working-directory: openclaw
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          SRC=apps/macos/Sources/OpenClaw/AgentEventsWindow.swift
+          if [ "$MODE" = "base" ]; then
+            python3 - "$SRC" <<'PY'
+          import sys, pathlib
+          p = pathlib.Path(sys.argv[1])
+          s = p.read_text()
+          if "id: \\.id" not in s:
+              raise SystemExit("expected id: \\.id in " + str(p))
+          p.write_text(s.replace("id: \\.id", "id: \\.seq"))
+          print("BASE mode: reverted to id: \\.seq")
+          PY
+          fi
+          grep -n "ForEach" "$SRC" | head -3
+      - name: Build plugin assets
+        working-directory: openclaw
+        timeout-minutes: 20
+        run: pnpm plugins:assets:build
+      - name: Package app (ad-hoc)
+        working-directory: openclaw
+        timeout-minutes: 70
+        env:
+          ALLOW_ADHOC_SIGNING: '1'
+          SIGN_IDENTITY: '-'
+          OPENCLAW_PACKAGE_APP_ROOT: ${{ github.workspace }}/openclaw/dist/OpenClaw.app
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.openclaw"
+          touch "$HOME/.openclaw/disable-launchagent"
+          ./scripts/package-mac-app.sh 2>&1 | tail -80
+          ls -la "$APP_EXEC"
+          plutil -p dist/OpenClaw.app/Contents/Info.plist | grep -E 'CFBundleIdentifier|LSUIElement' || true
+          codesign -dv dist/OpenClaw.app 2>&1 | head -5 || true
+      - name: Write config + stub model + start Gateway
+        working-directory: openclaw
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.openclaw"
+          cat > "$HOME/.openclaw/openclaw.json" <<'JSON'
+          {
+            "gateway": { "mode": "local", "port": 18789, "auth": { "mode": "none" } },
+            "models": {
+              "providers": {
+                "stub": {
+                  "baseUrl": "http://127.0.0.1:18999/v1",
+                  "api": "openai-completions",
+                  "apiKey": "stub-key",
+                  "models": [
+                    {
+                      "id": "stub-1",
+                      "name": "Stub 1",
+                      "compat": { "supportsTools": false, "requiresStringContent": true, "strictMessageKeys": true }
+                    }
+                  ]
+                }
+              }
+            },
+            "agents": { "defaults": { "model": { "primary": "stub/stub-1" } }, "entries": { "main": {} } }
+          }
+          JSON
+          cat > /tmp/stub-model.mjs <<'JS'
+          import http from "node:http";
+          const port = Number(process.env.STUB_PORT || 18999);
+          const server = http.createServer((req, res) => {
+            let body = "";
+            req.on("data", (c) => { body += c; });
+            req.on("end", () => {
+              if (req.url.startsWith("/v1/models")) {
+                res.writeHead(200, { "content-type": "application/json" });
+                res.end(JSON.stringify({ object: "list", data: [{ id: "stub-1", object: "model" }] }));
+                return;
+              }
+              if (!req.url.includes("/chat/completions")) {
+                res.writeHead(404); res.end("not found"); return;
+              }
+              let parsed = {};
+              try { parsed = JSON.parse(body || "{}"); } catch {}
+              const id = "chatcmpl-stub-" + Date.now();
+              const created = Math.floor(Date.now() / 1000);
+              const model = parsed.model || "stub-1";
+              if (parsed.stream === false) {
+                res.writeHead(200, { "content-type": "application/json" });
+                res.end(JSON.stringify({
+                  id, object: "chat.completion", created, model,
+                  choices: [{ index: 0, message: { role: "assistant", content: "stub reply" }, finish_reason: "stop" }],
+                  usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 }
+                }));
+                return;
+              }
+              res.writeHead(200, {
+                "content-type": "text/event-stream",
+                "cache-control": "no-cache",
+                connection: "keep-alive"
+              });
+              const chunk = (delta, finish = null) => "data: " + JSON.stringify({
+                id, object: "chat.completion.chunk", created, model,
+                choices: [{ index: 0, delta, finish_reason: finish }]
+              }) + "\n\n";
+              res.write(chunk({ role: "assistant", content: "" }));
+              res.write(chunk({ content: "stub reply" }));
+              res.write(chunk({}, "stop"));
+              res.write("data: [DONE]\n\n");
+              res.end();
+            });
+          });
+          server.listen(port, "127.0.0.1", () => console.log("stub model listening on " + port));
+          JS
+          pnpm openclaw doctor --fix > /tmp/doctor.log 2>&1 || true
+          tail -25 /tmp/doctor.log || true
+          nohup node /tmp/stub-model.mjs > /tmp/stub.log 2>&1 &
+          nohup pnpm openclaw gateway run > /tmp/gateway.log 2>&1 &
+          for i in $(seq 1 120); do
+            if nc -z 127.0.0.1 18789 2>/dev/null; then echo "gateway port open after $((i*5))s"; break; fi
+            sleep 5
+          done
+          nc -z 127.0.0.1 18789 && echo "PORT_OPEN" || echo "PORT_CLOSED_AFTER_WAIT"
+          echo "--- stub ---"; tail -5 /tmp/stub.log || true
+          echo "--- gateway ---"; tail -30 /tmp/gateway.log || true
+          pnpm openclaw gateway status || true
+      - name: Enable debug pane + launch packaged app
+        working-directory: openclaw
+        run: |
+          set -x
+          defaults write "$APP_BUNDLE_ID" openclaw.debugPaneEnabled -bool true
+          defaults write "$APP_BUNDLE_ID" openclaw.onboardingSeen -bool true
+          defaults write "$APP_BUNDLE_ID" openclaw.onboardingVersion -int 8
+          defaults read "$APP_BUNDLE_ID" openclaw.debugPaneEnabled
+          defaults read "$APP_BUNDLE_ID" openclaw.onboardingSeen
+          pkill -f "OpenClaw.app/Contents/MacOS/OpenClaw" || true
+          sleep 1
+          open "$PWD/dist/OpenClaw.app" --args --attach-only --debug-open-menu
+          APP_PID=""
+          for i in $(seq 1 60); do
+            APP_PID=$(pgrep -f "OpenClaw.app/Contents/MacOS/OpenClaw" | head -1)
+            if [ -n "$APP_PID" ]; then echo "APP_UP after ${i}s (pid $APP_PID)"; break; fi
+            sleep 1
+          done
+          [ -n "$APP_PID" ] || { echo "APP_NOT_RUNNING"; exit 1; }
+          echo "APP_PID=$APP_PID" >> "$GITHUB_ENV"
+          sleep 8
+          ps -p "$APP_PID" -o pid,comm,args || true
+          echo "--- frontmost ---"
+          osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' || true
+      - name: Open Debug -> Open Agent Events (status menu, AX)
+        working-directory: openclaw
+        continue-on-error: true
+        run: |
+          APP_PID="$APP_PID" osascript "$GITHUB_WORKSPACE/proof/probe/open-agent-events.applescript" 2>&1 | tee /tmp/menu.log
+          echo "---"
+          screencapture -x /tmp/full-screen-menu.png || true
+          file /tmp/full-screen-menu.png || true
+      - name: Approve pending device
+        working-directory: openclaw
+        continue-on-error: true
+        run: |
+          set +e
+          pnpm openclaw devices list --json > /tmp/devices-before.json 2>&1 || true
+          tail -c 1500 /tmp/devices-before.json
+          python3 - > /tmp/pending.txt <<'PYDEV'
+          import json, re
+          raw = open('/tmp/devices-before.json').read()
+          m = re.search(r"\{.*\}", raw, re.S)
+          try:
+              parsed = json.loads(m.group(0)) if m else {}
+          except Exception:
+              parsed = {}
+          for p in parsed.get("pending", []) or []:
+              print(p.get("requestId") or p.get("id") or "")
+          PYDEV
+          echo "--- pending ids ---"; cat /tmp/pending.txt
+          while read -r rid; do
+            if [ -n "$rid" ]; then pnpm openclaw devices approve "$rid" 2>&1 | tail -3; fi
+          done < /tmp/pending.txt
+          sleep 10
+          pnpm openclaw devices list --json > /tmp/devices.json 2>&1 || true
+          tail -c 1200 /tmp/devices.json
+          grep -o "client=[a-zA-Z-]*" /tmp/gateway.log | sort | uniq -c || true
+      - name: Agent turn A
+        working-directory: openclaw
+        continue-on-error: true
+        run: |
+          pnpm openclaw agent --session-id events-a --message "Reply with the single word: alpha" --json \
+            > /tmp/turn-a.json 2>/tmp/turn-a.err || true
+          head -20 /tmp/turn-a.json || true
+          tail -10 /tmp/turn-a.err || true
+          sleep 3
+      - name: Agent turn B (window already open, same seq numbers)
+        working-directory: openclaw
+        continue-on-error: true
+        run: |
+          pnpm openclaw agent --session-id events-b --message "Reply with the single word: beta" --json \
+            > /tmp/turn-b.json 2>/tmp/turn-b.err || true
+          head -20 /tmp/turn-b.json || true
+          tail -10 /tmp/turn-b.err || true
+          sleep 5
+      - name: Capture shipped window + rows
+        working-directory: openclaw
+        run: |
+          set +e
+          swift "$GITHUB_WORKSPACE/proof/probe/window-capture.swift" 2>&1 | tee /tmp/windows.txt
+          WID=$(sed -n 's/^AGENT_EVENTS_WID=//p' /tmp/windows.txt | head -1)
+          RECT=$(sed -n 's/^AGENT_EVENTS_RECT=//p' /tmp/windows.txt | head -1)
+          echo "WID=$WID RECT=$RECT"
+          if [ -n "$WID" ]; then screencapture -x -o -l "$WID" /tmp/agent-events-window.png || true; fi
+          if [ ! -s /tmp/agent-events-window.png ] && [ -n "$RECT" ]; then
+            screencapture -x -R"$RECT" /tmp/agent-events-window.png || true
+          fi
+          file /tmp/agent-events-window.png || true
+          screencapture -x /tmp/full-screen.png || true
+          APP_PID="$APP_PID" osascript "$GITHUB_WORKSPACE/proof/probe/ax-rows.applescript" 2>&1 | tee /tmp/rows-after.txt
+          APP_PID="$APP_PID" osascript "$GITHUB_WORKSPACE/proof/probe/ax-tree.applescript" 2>&1 | tee /tmp/ax-tree.txt
+          swift "$GITHUB_WORKSPACE/proof/probe/ocr-window.swift" /tmp/agent-events-window.png 2>&1 | tee /tmp/window-ocr.txt || true
+          echo "--- rows ---"; cat /tmp/rows-after.txt || true
+          echo "--- ocr ---"; cat /tmp/window-ocr.txt || true
+          echo "--- app log ---"; tail -40 /tmp/app.log 2>/dev/null || true
+      - name: Assert shipped-app proof
+        run: |
+          set -euo pipefail
+          echo "== window capture =="
+          test -s /tmp/agent-events-window.png
+          file /tmp/agent-events-window.png
+          echo "== accessibility rows =="
+          cat /tmp/rows-after.txt
+          python3 - <<'PY'
+          import re, sys
+
+          def read(path):
+              try:
+                  return open(path, errors='replace').read()
+              except FileNotFoundError:
+                  return ''
+
+          ax = read('/tmp/ax-tree.txt')
+          rows = read('/tmp/rows-after.txt')
+          ocr = read('/tmp/window-ocr.txt')
+          print('--- AX tree ---'); print(ax[:4000])
+          print('--- OCR ---'); print(ocr[:4000])
+          if 'NO_WINDOW' in ax + rows:
+              sys.exit('proof failed: no Agent Events window')
+          text = ax + chr(10) + rows + chr(10) + ocr
+          runs = sorted(set(re.findall(r'run[\s:]+([0-9a-fA-F-]{8,})', text)))
+          print('runs seen:', runs)
+          if len(runs) < 2:
+              sys.exit('proof failed: expected two runs, saw ' + repr(runs))
+          PY
+      - name: Collect
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shipped-app-events-v11-${{ inputs.mode }}
+          path: |
+            /tmp/agent-events-window.png
+            /tmp/rows-after.txt
+            /tmp/ax-tree.txt
+            /tmp/window-ocr.txt
+            /tmp/windows.txt
+            /tmp/app.log
+            /tmp/gateway.log
+            /tmp/stub.log
+            /tmp/turn-a.json
+            /tmp/turn-a.err
+            /tmp/turn-b.json
+            /tmp/turn-b.err
+            /tmp/devices.json
+            /tmp/menu.log
+            /tmp/full-screen-menu.png
+            /tmp/full-screen.png
+            /tmp/doctor.log
