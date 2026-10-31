@@ -1,0 +1,49 @@
+name: probe-ax-keychain
+'on': workflow_dispatch
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - name: Keychain state
+        run: |
+          set +e
+          security list-keychains
+          security show-keychain-info 2>&1 || true
+          security show-keychain-info ~/Library/Keychains/login.keychain-db 2>&1 || true
+          ls -la ~/Library/Keychains/ | head -10
+      - name: Accessibility automation probe
+        run: |
+          set +e
+          open -a TextEdit
+          sleep 6
+          osascript <<'AS' 2>&1 | tee /tmp/ax.log
+          tell application "System Events"
+            set p to first process whose name is "TextEdit"
+            set out to "PROC=" & (name of p as string) & linefeed
+            set out to out & "WINDOWS=" & (count of windows of p as string) & linefeed
+            set out to out & "MENUBARS=" & (count of menu bars of p as string) & linefeed
+            if (count of windows of p) > 0 then
+              set out to out & "WIN1=" & (name of window 1 of p as string) & linefeed
+            end if
+            return out
+          end tell
+          AS
+          grep -q 'PROC=TextEdit' /tmp/ax.log && echo "AX_OK" || echo "AX_FAILED"
+      - name: Screen capture probe
+        run: |
+          set +e
+          screencapture -x /tmp/screen.png
+          file /tmp/screen.png
+          ls -la /tmp/screen.png
+          echo "--- frontmost ---"
+          osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' || true
+      - name: Status item probe (menu bar 2)
+        run: |
+          set +e
+          osascript <<'AS' 2>&1 | tee /tmp/status.log
+          tell application "System Events"
+            set p to first process whose name is "SystemUIServer"
+            return "STATUS_ITEMS=" & (count of menu bar items of menu bar 2 of p as string)
+          end tell
+          AS
