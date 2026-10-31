@@ -6,50 +6,50 @@ AXButton :: missing value
 AXScrollArea :: missing value
 AXOpaqueProviderGroup :: missing value
 AXStaticText :: LIFECYCLE
-AXStaticText :: run a03115bd-fb29-404c-870f-85fe3d4ee323
-AXStaticText :: 16:06:10.718
+AXStaticText :: run e829da8a-64fa-4e4f-8633-46df300693da
+AXStaticText :: 17:22:17.001
 AXStaticText :: LIFECYCLE
-AXStaticText :: run a03115bd-fb29-404c-870f-85fe3d4ee323
-AXStaticText :: 16:06:10.693
+AXStaticText :: run e829da8a-64fa-4e4f-8633-46df300693da
+AXStaticText :: 17:22:16.975
 AXStaticText :: {
   "model" : null,
-  "phase" : "model",
-  "provider" : null
+  "provider" : null,
+  "phase" : "model"
 }
 AXStaticText :: LIFECYCLE
-AXStaticText :: run a03115bd-fb29-404c-870f-85fe3d4ee323
-AXStaticText :: 16:06:10.662
+AXStaticText :: run e829da8a-64fa-4e4f-8633-46df300693da
+AXStaticText :: 17:22:16.948
 AXStaticText :: {
-  "endedAt" : 1793462770662,
-  "aborted" : false,
+  "phase" : "finishing",
   "livenessState" : "working",
   "stopReason" : "stop",
-  "phase" : "finishing"
+  "aborted" : false,
+  "endedAt" : 1793467336948
 }
 AXStaticText :: USAGE
-AXStaticText :: run a03115bd-fb29-404c-870f-85fe3d4ee323
-AXStaticText :: 16:06:10.643
+AXStaticText :: run e829da8a-64fa-4e4f-8633-46df300693da
+AXStaticText :: 17:22:16.936
 AXStaticText :: ASSISTANT
-AXStaticText :: run a03115bd-fb29-404c-870f-85fe3d4ee323
-AXStaticText :: 16:06:10.626
+AXStaticText :: run e829da8a-64fa-4e4f-8633-46df300693da
+AXStaticText :: 17:22:16.935
 AXStaticText :: {
-  "text" : "stub reply",
-  "itemId" : "4a8725c6-a7ae-4c66-93b8-afba190f83d0:1",
-  "delta" : "stub reply"
+  "itemId" : "57d6395e-db36-4e4a-b01a-562c0bcebc54:1",
+  "delta" : "stub reply",
+  "text" : "stub reply"
 }
 AXStaticText :: LIFECYCLE
-AXStaticText :: run a03115bd-fb29-404c-870f-85fe3d4ee323
-AXStaticText :: 16:06:10.620
+AXStaticText :: run e829da8a-64fa-4e4f-8633-46df300693da
+AXStaticText :: 17:22:16.931
 AXStaticText :: {
-  "phase" : "model",
   "model" : "stub-1",
-  "provider" : "stub"
+  "provider" : "stub",
+  "phase" : "model"
 }
 AXStaticText :: LIFECYCLE
-AXStaticText :: run a03115bd-fb29-404c-870f-85fe3d4ee323
-AXStaticText :: 16:06:10.292
+AXStaticText :: run e829da8a-64fa-4e4f-8633-46df300693da
+AXStaticText :: 17:22:16.854
 AXStaticText :: {
-  "startedAt" : 1793462770292,
+  "startedAt" : 1793467336854,
   "phase" : "start"
 }
 AXScrollBar :: 0.0
