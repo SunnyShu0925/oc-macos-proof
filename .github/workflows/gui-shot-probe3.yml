@@ -38,21 +38,37 @@ jobs:
             return m
           }
 
+          func makeRep(_ bounds: NSRect) -> NSBitmapImageRep? {
+            let scale: CGFloat = 2
+            return NSBitmapImageRep(
+              bitmapDataPlanes: nil,
+              pixelsWide: Int(bounds.width * scale),
+              pixelsHigh: Int(bounds.height * scale),
+              bitsPerSample: 8,
+              samplesPerPixel: 4,
+              hasAlpha: true,
+              isPlanar: false,
+              colorSpaceName: .deviceRGB,
+              bitmapFormat: [],
+              bytesPerRow: 0,
+              bitsPerPixel: 0).map { rep in
+                rep.size = bounds.size
+                return rep
+              }
+          }
+
           func savePNG(of view: NSView, to path: String, label: String) {
             let bounds = view.bounds
             print("SAVE label=\(label) bounds=\(bounds) cls=\(type(of: view))")
-            if let rep = view.bitmapImageRepForDrawing(in: bounds) {
-              view.cacheDisplay(in: bounds, to: rep)
-              if let data = rep.representation(using: .png, properties: [:]) {
-                try? data.write(to: URL(fileURLWithPath: path))
-                print("SAVE_OK label=\(label) png bytes=\(data.count) px=\(rep.pixelsWide)x\(rep.pixelsHigh)")
-              } else { print("SAVE_FAIL png label=\(label)") }
-            } else { print("SAVE_FAIL rep label=\(label)") }
-            let pdf = view.dataWithPDF(inside: bounds)
-            print("PDF label=\(label) bytes=\(pdf.count)")
-            if let img = NSImage(data: pdf) {
-              print("PDF_IMAGE label=\(label) size=\(img.size)")
+            guard let rep = makeRep(bounds) else {
+              print("SAVE_FAIL rep label=\(label)"); return
             }
+            view.cacheDisplay(in: bounds, to: rep)
+            guard let data = rep.representation(using: NSBitmapImageRep.FileType.png, properties: [:]) else {
+              print("SAVE_FAIL png label=\(label)"); return
+            }
+            try? data.write(to: URL(fileURLWithPath: path))
+            print("SAVE_OK label=\(label) png bytes=\(data.count) px=\(rep.pixelsWide)x\(rep.pixelsHigh)")
           }
 
           func popAndSnapshot(_ menu: NSMenu, path: String, label: String) {
