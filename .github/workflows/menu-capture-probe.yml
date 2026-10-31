@@ -1,0 +1,127 @@
+name: Menu capture feasibility probe
+
+# Answers one question: can this macOS runner capture the pixels of an open
+# NSMenu (status-bar popup) with screencapture -l, the same path that captured
+# the shipped app window in the agent-events proof?
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout proof harness
+        uses: actions/checkout@v4
+        with:
+          path: proof
+
+      - name: Build probe app
+        run: |
+          set -euo pipefail
+          APP=/tmp/MenuProbe.app
+          rm -rf "$APP"
+          mkdir -p "$APP/Contents/MacOS"
+          cp proof/probe/menu-app/Info.plist "$APP/Contents/Info.plist"
+          swiftc -O proof/probe/menu-app/main.swift -o "$APP/Contents/MacOS/MenuProbe"
+          codesign --force --sign - "$APP" 2>&1 | tail -2 || true
+          ls -l "$APP/Contents/MacOS/MenuProbe"
+          swiftc -O proof/probe/menu-probe.swift -o /tmp/menu-probe
+          echo "BUILD_OK"
+
+      - name: Launch, open menu, capture
+        run: |
+          set +e
+          sw_vers
+          echo "console user: $(stat -f '%Su' /dev/console)"
+
+          defaults write probe.menu.capture AppleEnabled -bool true || true
+          open /tmp/MenuProbe.app
+          PID=""
+          for i in $(seq 1 30); do
+            PID=$(pgrep -f "MenuProbe.app/Contents/MacOS/MenuProbe" | head -1)
+            [ -n "$PID" ] && break
+            sleep 1
+          done
+          echo "APP_PID=$PID"
+          [ -n "$PID" ] || { echo "APP_NOT_RUNNING"; exit 1; }
+          sleep 3
+
+          /tmp/menu-probe windows "$PID" | tee /tmp/windows-before.txt
+
+          APP_PID="$PID" osascript proof/probe/open-probe-menu.applescript "$PID" 2>&1 | tee /tmp/ax-open.log
+          sleep 1
+
+          /tmp/menu-probe windows "$PID" | tee /tmp/windows-open.txt
+
+          python3 - <<'PY' > /tmp/targets.txt
+          import re
+          lines = open('/tmp/windows-open.txt').read().splitlines()
+          wins = []
+          for line in lines:
+              m = re.match(r'WIN num=(-?\d+) layer=(-?\d+) x=(-?[\d.]+) y=(-?[\d.]+) w=([\d.]+) h=([\d.]+)', line)
+              if m:
+                  wins.append(dict(num=int(m.group(1)), layer=int(m.group(2)), x=float(m.group(3)), y=float(m.group(4)), w=float(m.group(5)), h=float(m.group(6))))
+          menu = [w for w in wins if w['layer'] >= 100 and w['h'] > 45]
+          control = [w for w in wins if w['h'] > 150]
+          print('MENU_CANDIDATES=' + repr(menu))
+          print('CONTROL_CANDIDATES=' + repr(control))
+          env = ''
+          if menu:
+              best = max(menu, key=lambda w: w['h'])
+              env += 'MENU_WID=%d\n' % best['num']
+              env += 'MENU_RECT=%d,%d,%d,%d\n' % (best['x'], best['y'], best['w'], best['h'])
+          if control:
+              env += 'CONTROL_WID=%d\n' % max(control, key=lambda w: w['h'])['num']
+          open('/tmp/targets.env', 'w').write(env)
+          PY
+          cat /tmp/targets.txt
+          cat /tmp/targets.env 2>/dev/null || true
+
+          set -a
+          . /tmp/targets.env 2>/dev/null || true
+          set +a
+          mkdir -p /tmp/shots
+
+          if [ -n "${MENU_WID:-}" ]; then
+            screencapture -x -o -l "$MENU_WID" /tmp/shots/menu-window.png; echo "MENU_WINDOW_SHOT=$? bytes=$(stat -f%z /tmp/shots/menu-window.png 2>/dev/null || echo 0)"
+          fi
+          if [ -n "${MENU_RECT:-}" ]; then
+            screencapture -x -R"$MENU_RECT" /tmp/shots/menu-region.png; echo "MENU_REGION_SHOT=$? bytes=$(stat -f%z /tmp/shots/menu-region.png 2>/dev/null || echo 0)"
+          fi
+          if [ -n "${CONTROL_WID:-}" ]; then
+            screencapture -x -o -l "$CONTROL_WID" /tmp/shots/control-window.png; echo "CONTROL_SHOT=$? bytes=$(stat -f%z /tmp/shots/control-window.png 2>/dev/null || echo 0)"
+          fi
+          screencapture -x /tmp/shots/full-screen.png; echo "FULL_SHOT=$? bytes=$(stat -f%z /tmp/shots/full-screen.png 2>/dev/null || echo 0)"
+
+          echo "=== stats ==="
+          /tmp/menu-probe stats /tmp/shots/*.png
+          echo "=== ocr ==="
+          /tmp/menu-probe ocr /tmp/shots/*.png | tee /tmp/ocr.txt
+
+          echo "=== feasibility verdict ==="
+          if grep -qE "Thinking|Off|Minimal|High" /tmp/ocr.txt; then
+            echo "MENU_PIXELS_CAPTURED=yes"
+          else
+            echo "MENU_PIXELS_CAPTURED=no"
+          fi
+
+      - name: Close menu and clean up
+        if: ${{ always() }}
+        run: |
+          osascript -e 'tell application "System Events" to key code 53' 2>/dev/null || true
+          pkill -f "MenuProbe.app/Contents/MacOS/MenuProbe" || true
+          ls -l /tmp/shots 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: menu-capture-probe
+          path: |
+            /tmp/shots
+            /tmp/windows-before.txt
+            /tmp/windows-open.txt
+            /tmp/ax-open.log
+            /tmp/ocr.txt
+            /tmp/targets.txt
