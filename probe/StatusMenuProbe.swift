@@ -95,7 +95,7 @@ struct StatusMenuProbe {
         }
 
         func close() async {
-            await self.gateway.close()
+            await self.control.disconnect()
         }
     }
 
