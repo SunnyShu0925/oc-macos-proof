@@ -1,0 +1,211 @@
+WINDOW=Agent Events
+ELEMENTS=43
+AXGroup :: missing value
+AXStaticText :: Agent Events
+AXButton :: missing value
+AXScrollArea :: missing value
+AXOpaqueProviderGroup :: missing value
+AXStaticText :: LIFECYCLE
+AXStaticText :: run b867f318-ae6f-4cb6-bb7a-21d21bc0252f
+AXStaticText :: 19:49:28.782
+AXStaticText :: {
+  "aborted" : false,
+  "stopReason" : "stop",
+  "endedAt" : 1793476168782,
+  "livenessState" : "working",
+  "phase" : "finishing"
+}
+AXStaticText :: USAGE
+AXStaticText :: run b867f318-ae6f-4cb6-bb7a-21d21bc0252f
+AXStaticText :: 19:49:28.754
+AXStaticText :: ASSISTANT
+AXStaticText :: run b867f318-ae6f-4cb6-bb7a-21d21bc0252f
+AXStaticText :: 19:49:28.748
+AXStaticText :: {
+  "text" : "stub reply",
+  "itemId" : "5cb6b439-99b4-4718-b082-45bec5733f80:1",
+  "delta" : "stub reply"
+}
+AXStaticText :: LIFECYCLE
+AXStaticText :: run b867f318-ae6f-4cb6-bb7a-21d21bc0252f
+AXStaticText :: 19:49:28.736
+AXStaticText :: {
+  "model" : "stub-1",
+  "phase" : "model",
+  "provider" : "stub"
+}
+AXStaticText :: LIFECYCLE
+AXStaticText :: run b867f318-ae6f-4cb6-bb7a-21d21bc0252f
+AXStaticText :: 19:49:28.458
+AXStaticText :: {
+  "phase" : "start",
+  "startedAt" : 1793476168458
+}
+AXStaticText :: LIFECYCLE
+AXStaticText :: run b867f318-ae6f-4cb6-bb7a-21d21bc0252f
+AXStaticText :: 19:49:28.854
+AXStaticText :: LIFECYCLE
+AXStaticText :: run b867f318-ae6f-4cb6-bb7a-21d21bc0252f
+AXStaticText :: 19:49:28.823
+AXStaticText :: {
+  "model" : null,
+  "provider" : null,
+  "phase" : "model"
+}
+AXScrollBar :: 1.0
+AXValueIndicator :: 1.0
+AXButton :: missing value
+AXButton :: missing value
+AXButton :: missing value
+AXButton :: missing value
+AXButton :: missing value
+AXButton :: missing value
+AXGroup :: missing value
+AXGroup :: missing value
+AXButton :: missing value
+AXStaticText :: Agent Events
+[36;1mset -euo pipefail[0m
+[36;1mtest -s /tmp/window-0.0.png[0m
+[36;1mtest -s /tmp/window-wheel.png[0m
+[36;1mpython3 - <<'PY'[0m
+[36;1mimport re, sys[0m
+[36;1m[0m
+[36;1mUUID = re.compile(r'run\s+([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')[0m
+[36;1m[0m
+[36;1mdef read(path):[0m
+[36;1m    try:[0m
+[36;1m        return open(path, errors='replace').read()[0m
+[36;1m    except FileNotFoundError:[0m
+[36;1m        return ''[0m
+[36;1m[0m
+[36;1mdef ids(text):[0m
+[36;1m    return sorted(set(u.lower() for u in UUID.findall(text)))[0m
+[36;1m[0m
+[36;1mdef flat(text):[0m
+[36;1m    return text.lower().replace('-', '').replace(' ', '').replace('\n', '')[0m
+[36;1m[0m
+[36;1max = ids(read('/tmp/ax-tree.txt'))[0m
+[36;1mexpected = 1 if 'base' == 'base' else 2[0m
+[36;1mprint('AX run ids rendered by the shipped window:', ax)[0m
+[36;1mif len(ax) != expected:[0m
+[36;1m    sys.exit('proof failed: expected %d rendered run id(s), saw %r' % (expected, ax))[0m
+[36;1m[0m
+[36;1mshots = {}[0m
+[36;1mfor name in ['0.0', '0.2', '0.4', '0.6', '0.8', '1.0', 'wheel']:[0m
+[36;1m    text = flat(read('/tmp/ocr-%s.txt' % name))[0m
+[36;1m    shots[name] = [u for u in ax if u.replace('-', '') in text][0m
+[36;1m    print('OCR %-5s -> %r' % (name, shots[name]))[0m
+[36;1mboth = [name for name, hits in shots.items() if len(hits) >= 2][0m
+[36;1mvisible = sorted({u for hits in shots.values() for u in hits})[0m
+[36;1mprint('screenshots that show both runs:', both)[0m
+[36;1mprint('runs visible across screenshots:', visible)[0m
+[36;1mif expected == 2 and len(visible) < 2:[0m
+[36;1m    sys.exit('proof failed: screenshots only ever show %r' % (visible,))[0m
+[36;1mprint('OK: %d run(s) in the window, %d run(s) visible in screenshots' % (len(ax), len(visible)))[0m
+[36;1mPY[0m
+shell: /bin/bash -e {0}
+env:
+  APP_BUNDLE_ID: ai.openclaw.mac.debug
+  APP_EXEC: dist/OpenClaw.app/Contents/MacOS/OpenClaw
+  APP_PID: 78239
+AX run ids rendered by the shipped window: ['b867f318-ae6f-4cb6-bb7a-21d21bc0252f']
+OCR 0.0   -> ['b867f318-ae6f-4cb6-bb7a-21d21bc0252f']
+OCR 0.2   -> ['b867f318-ae6f-4cb6-bb7a-21d21bc0252f']
+OCR 0.4   -> ['b867f318-ae6f-4cb6-bb7a-21d21bc0252f']
+OCR 0.6   -> ['b867f318-ae6f-4cb6-bb7a-21d21bc0252f']
+OCR 0.8   -> ['b867f318-ae6f-4cb6-bb7a-21d21bc0252f']
+OCR 1.0   -> ['b867f318-ae6f-4cb6-bb7a-21d21bc0252f']
+OCR wheel -> []
+screenshots that show both runs: []
+runs visible across screenshots: ['b867f318-ae6f-4cb6-bb7a-21d21bc0252f']
+OK: 1 run(s) in the window, 1 run(s) visible in screenshots
+with:
+  name: shipped-app-events-v17-base
+  path: /tmp/agent-events-window.png
+/tmp/window-1.0.png
+/tmp/window-wheel.png
+/tmp/ocr-0.0.txt
+/tmp/ocr-1.0.txt
+/tmp/ocr-wheel.txt
+/tmp/ax-tree-top.txt
+/tmp/ax-tree-tall.txt
+/tmp/ax-tree-bottom.txt
+/tmp/rows-top.txt
+/tmp/rows-after.txt
+/tmp/windows-top.txt
+/tmp/windows-tall.txt
+/tmp/grow.log
+/tmp/scroll.log
+/tmp/full-screen.png
+/tmp/menu.log
+/tmp/turn-a.json
+/tmp/turn-b.json
+/tmp/gateway.log
+/tmp/stub.log
+/tmp/doctor.log
+/tmp/devices.json
+/tmp/app.log
+/tmp/window-ocr.txt
+  if-no-files-found: warn
+  compression-level: 6
+  overwrite: false
+  include-hidden-files: false
+env:
+  APP_BUNDLE_ID: ai.openclaw.mac.debug
+  APP_EXEC: dist/OpenClaw.app/Contents/MacOS/OpenClaw
+  APP_PID: 78239
+(node:83817) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Multiple search paths detected. Calculating the least common ancestor of all paths
+The least common ancestor is /tmp. This will be the root directory of the artifact
+With the provided path, there will be 14 files uploaded
+Artifact name is valid!
+Root directory input is valid!
+Beginning upload of artifact content to blob storage
+(node:83817) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+Uploaded bytes 97782
+Finished uploading artifact content to blob storage!
+SHA256 digest of uploaded artifact zip is 8bc189a620f779c45d66aea4b266bb897c4169cd5c0b12f3a5512e770379f8f5
+Finalizing artifact upload
+Artifact shipped-app-events-v17-base.zip successfully finalized. Artifact ID 13054978762
+Artifact shipped-app-events-v17-base has been successfully uploaded! Final size is 97782 bytes. Artifact ID is 13054978762
+Artifact download URL: https://github.com/SunnyShu0925/oc-macos-proof/actions/runs/41233075151/artifacts/13054978762
+Post job cleanup.
+[command]/opt/homebrew/bin/git version
+git version 2.56.0
+Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/827a589b-fc1c-4719-9c92-468c2086013c/.gitconfig'
+Temporarily overriding HOME='/Users/runner/work/_temp/827a589b-fc1c-4719-9c92-468c2086013c' before making global git config changes
+Adding repository directory to the temporary git global config as a safe directory
+[command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/oc-macos-proof/oc-macos-proof/openclaw
+[command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+[command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+[command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+http.https://github.com/.extraheader
+[command]/opt/homebrew/bin/git config --local --unset-all http.https://github.com/.extraheader
+[command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+[command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+[command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Post job cleanup.
+[command]/opt/homebrew/bin/git version
+git version 2.56.0
+Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/c88d7962-472d-4210-b865-991d80a91544/.gitconfig'
+Temporarily overriding HOME='/Users/runner/work/_temp/c88d7962-472d-4210-b865-991d80a91544' before making global git config changes
+Adding repository directory to the temporary git global config as a safe directory
+[command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/oc-macos-proof/oc-macos-proof/proof
+[command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+[command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+[command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+http.https://github.com/.extraheader
+[command]/opt/homebrew/bin/git config --local --unset-all http.https://github.com/.extraheader
+[command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+[command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+[command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Cleaning up orphan processes
+Terminate orphan process: pid (78686) (System Events)
+Terminate orphan process: pid (78239) (OpenClaw)
+Terminate orphan process: pid (78186) (node)
+Terminate orphan process: pid (77616) (node)
+Terminate orphan process: pid (77216) (node)
+Terminate orphan process: pid (77126) (esbuild)
+Terminate orphan process: pid (77125) (node)
+Terminate orphan process: pid (77098) (node)
