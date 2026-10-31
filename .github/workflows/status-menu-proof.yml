@@ -1,0 +1,132 @@
+name: Status menu inherit-default proof (PR 188938)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: PR branch on SunnyShu0925/openclaw
+        required: true
+        default: fix/status-menu-off-inherit-default-187607
+      mode:
+        description: "head (fixed) or base (off manufactured again)"
+        required: true
+        default: head
+
+jobs:
+  proof:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout openclaw PR branch (fork)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ inputs.pr_branch }}
+          path: openclaw
+
+      - name: Checkout proof scripts
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: main
+          path: proofrepo
+
+      - name: Toolchain
+        run: |
+          swift --version
+          xcodebuild -version || true
+          sw_vers
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+
+      - name: Install deps (SwiftPM build-tool plugins)
+        working-directory: openclaw
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Prepare Apple Mermaid assets
+        working-directory: openclaw
+        run: |
+          node scripts/prepare-apple-mermaid.mjs
+
+      - name: Stage probe + apply mode
+        working-directory: openclaw
+        run: |
+          PROBE="apps/macos/Tests/OpenClawIPCTests/StatusMenuProbe.swift"
+          cp "$GITHUB_WORKSPACE/proofrepo/probe/StatusMenuProbe.swift" "$PROBE"
+          echo "=== buildPreferenceMenu line before mode ==="
+          grep -n "let selected = levels.contains" apps/macos/Sources/OpenClaw/StatusMenuSessions.swift
+          if [ "${{ inputs.mode }}" = "base" ]; then
+            python3 - <<'PY'
+          import pathlib
+          p = pathlib.Path("apps/macos/Sources/OpenClaw/StatusMenuSessions.swift")
+          s = p.read_text()
+          before = s
+          s = s.replace(
+              'let selected = levels.contains(current ?? "") ? current : nil',
+              'let selected = levels.contains(current ?? "") ? current ?? "off" : "off"')
+          s = s.replace(
+              'let selected = current\n\n        for item in menu.items {',
+              'let selected = menu.items.contains {\n            ($0.representedObject as? [String: String])?["value"] == current\n        } ? current : "off"\n\n        for item in menu.items {',
+              1)
+          assert s != before, "base revert did not apply"
+          p.write_text(s)
+          PY
+          fi
+          echo "=== lines after mode (${{ inputs.mode }}) ==="
+          grep -n "let selected" apps/macos/Sources/OpenClaw/StatusMenuSessions.swift | head -5
+          echo "=== git diff stat ==="
+          git diff --stat
+
+      - name: Build package tests
+        working-directory: openclaw
+        continue-on-error: true
+        run: |
+          set +e
+          swift build --package-path apps/macos --build-system native --build-tests 2>&1 | tee /tmp/build-${{ inputs.mode }}.log
+          echo "BUILD_EXIT=${PIPESTATUS[0]}" | tee -a /tmp/build-${{ inputs.mode }}.log
+
+      - name: Run status menu probe
+        working-directory: openclaw
+        continue-on-error: true
+        env:
+          PROBE_OUT_DIR: /tmp/probe-out
+          PROBE_MODE: ${{ inputs.mode }}
+        run: |
+          set +e
+          mkdir -p /tmp/probe-out
+          swift test --package-path apps/macos --build-system native --filter StatusMenuProbe 2>&1 | tee /tmp/probe-${{ inputs.mode }}.log
+          echo "PROBE_EXIT=${PIPESTATUS[0]}" | tee -a /tmp/probe-${{ inputs.mode }}.log
+
+      - name: Run focused regression (PR's added test)
+        working-directory: openclaw
+        continue-on-error: true
+        run: |
+          set +e
+          swift test --package-path apps/macos --build-system native --filter "StatusMenuSummariesTests" 2>&1 | tee /tmp/regression-${{ inputs.mode }}.log
+          echo "REGRESSION_EXIT=${PIPESTATUS[0]}" | tee -a /tmp/regression-${{ inputs.mode }}.log
+
+      - name: Collect
+        if: always()
+        run: |
+          echo "=== BUILD tail (${{ inputs.mode }}) ==="
+          tail -25 /tmp/build-${{ inputs.mode }}.log 2>/dev/null || true
+          echo "=== PROBE key lines (${{ inputs.mode }}) ==="
+          grep -E "PROBE |SCENARIO |SUBMENU |ITEM |ANY_ON |CAPTURE |PROBE_DONE|BUILD_EXIT|PROBE_EXIT|error:|Test Suite|passed|failed" /tmp/probe-${{ inputs.mode }}.log 2>/dev/null | head -120 || true
+          echo "=== REGRESSION key lines (${{ inputs.mode }}) ==="
+          grep -E "Test Suite|passed|failed|error:|REGRESSION_EXIT|inherits the agent default" /tmp/regression-${{ inputs.mode }}.log 2>/dev/null | head -40 || true
+          ls -la /tmp/probe-out || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: status-menu-proof-${{ inputs.mode }}
+          path: |
+            /tmp/build-${{ inputs.mode }}.log
+            /tmp/probe-${{ inputs.mode }}.log
+            /tmp/regression-${{ inputs.mode }}.log
+            /tmp/probe-out
