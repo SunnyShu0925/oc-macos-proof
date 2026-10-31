@@ -120,6 +120,14 @@ struct StatusMenuProbe {
         return self.dump(sub, label: identifier)
     }
 
+    private func preferenceSubmenu(_ item: NSMenuItem, _ identifier: String) -> NSMenu? {
+        item.submenu?.items.first { $0.identifier?.rawValue == identifier }?.submenu
+    }
+
+    private func checkedTitles(_ submenu: NSMenu) -> [String] {
+        submenu.items.filter { $0.state == .on }.map(\.title)
+    }
+
     @Test
     func `probe inherited vs explicit off high`() async throws {
         let outputDir = ProcessInfo.processInfo.environment["PROBE_OUT_DIR"] ?? "/tmp/probe-out"
@@ -134,6 +142,10 @@ struct StatusMenuProbe {
             ("explicit-high", "high", nil),
             ("explicit-verbose-off", nil, "off"),
         ]
+        let identifiers = ["session.thinking", "session.verbose"]
+
+        // observed["<scenario>|<path>|<submenu>"] = checked titles
+        var observed: [String: [String]] = [:]
 
         for (name, thinking, verbose) in scenarios {
             let fixture = ProbeFixture(thinkingOverride: thinking, verboseOverride: verbose)
@@ -144,24 +156,68 @@ struct StatusMenuProbe {
             // Fresh-menu path: configureSessionItem -> buildSessionSubmenu -> buildPreferenceMenu.
             let item = NSMenuItem()
             fixture.sessions.configureSessionItem(item, row: row)
-            let menu = try #require(item.submenu)
+            _ = try #require(item.submenu)
 
             print("SCENARIO \(name) path=fresh")
-            for identifier in ["session.thinking", "session.verbose"] {
-                for line in self.submenuStates(item: item, identifier: identifier) { print(line) }
+            for identifier in identifiers {
+                guard let sub = self.preferenceSubmenu(item, identifier) else {
+                    print("SUBMENU \(identifier) MISSING")
+                    observed["\(name)|fresh|\(identifier)"] = ["<missing>"]
+                    continue
+                }
+                for line in self.dump(sub, label: identifier) { print(line) }
+                observed["\(name)|fresh|\(identifier)"] = self.checkedTitles(sub)
             }
 
             // Reuse path: a second configureSessionItem on the same item hits updateSessionSubmenu
             // -> updatePreferenceMenu. Row stays the same so the selected state must not drift.
             fixture.sessions.configureSessionItem(item, row: row)
             print("SCENARIO \(name) path=reuse")
-            for identifier in ["session.thinking", "session.verbose"] {
-                for line in self.submenuStates(item: item, identifier: identifier) { print(line) }
+            for identifier in identifiers {
+                guard let sub = self.preferenceSubmenu(item, identifier) else {
+                    observed["\(name)|reuse|\(identifier)"] = ["<missing>"]
+                    continue
+                }
+                for line in self.dump(sub, label: identifier) { print(line) }
+                observed["\(name)|reuse|\(identifier)"] = self.checkedTitles(sub)
             }
 
             await fixture.close()
         }
 
-        print("PROBE_DONE mode=\(mode)")
+        // The probe is a witness, not a mirror: it fails when the branch under test
+        // does not show the behavior the mode claims to demonstrate.
+        let isBase = mode == "base"
+        for path in ["fresh", "reuse"] {
+            let thinking = observed["inherited|\(path)|session.thinking"] ?? ["<missing>"]
+            let verbose = observed["inherited|\(path)|session.verbose"] ?? ["<missing>"]
+            print("CHECK inherited path=\(path) thinking=\(thinking) verbose=\(verbose) mode=\(mode)")
+            if isBase {
+                // Main manufactures the fallback: Off is checked on both submenus.
+                #expect(thinking == ["Off"], "base should check Off, saw \(thinking)")
+                #expect(verbose == ["Off"], "base should check Off, saw \(verbose)")
+            } else {
+                // Inheriting the default means no explicit override is checked.
+                #expect(thinking.isEmpty, "inherited session must not check any Thinking item, saw \(thinking)")
+                #expect(verbose.isEmpty, "inherited session must not check any Verbose item, saw \(verbose)")
+            }
+        }
+
+        if !isBase {
+            for path in ["fresh", "reuse"] {
+                // Explicit overrides keep their checkmark, on both rendering paths.
+                #expect(
+                    observed["explicit-off|\(path)|session.thinking"] == ["Off"],
+                    "explicit off must check Off, saw \(observed["explicit-off|\(path)|session.thinking"] ?? [])")
+                #expect(
+                    observed["explicit-high|\(path)|session.thinking"] == ["High"],
+                    "explicit high must check High, saw \(observed["explicit-high|\(path)|session.thinking"] ?? [])")
+                #expect(
+                    observed["explicit-verbose-off|\(path)|session.verbose"] == ["Off"],
+                    "explicit verbose off must check Off, saw \(observed["explicit-verbose-off|\(path)|session.verbose"] ?? [])")
+            }
+        }
+
+        print("PROBE_DONE mode=\(mode) expectations=checked")
     }
 }

@@ -1,5 +1,9 @@
 name: Status menu inherit-default proof (PR 188938)
 
+# Green here means the branch under test actually showed the claimed behavior:
+# the probe asserts its expectations, the regression step asserts the expected
+# exit code per mode, and the mode patch fails loudly when it no longer applies.
+
 on:
   workflow_dispatch:
     inputs:
@@ -55,12 +59,16 @@ jobs:
 
       - name: Stage probe + apply mode
         working-directory: openclaw
+        env:
+          MODE: ${{ inputs.mode }}
         run: |
+          set -euo pipefail
           PROBE="apps/macos/Tests/OpenClawIPCTests/StatusMenuProbe.swift"
           cp "$GITHUB_WORKSPACE/proofrepo/probe/StatusMenuProbe.swift" "$PROBE"
-          echo "=== buildPreferenceMenu line before mode ==="
-          grep -n "let selected = levels.contains" apps/macos/Sources/OpenClaw/StatusMenuSessions.swift
-          if [ "${{ inputs.mode }}" = "base" ]; then
+          SOURCE=apps/macos/Sources/OpenClaw/StatusMenuSessions.swift
+          echo "=== HEAD lines before mode ==="
+          grep -n "let selected" "$SOURCE" | head -5
+          if [ "$MODE" = "base" ]; then
             python3 - <<'PY'
           import pathlib
           p = pathlib.Path("apps/macos/Sources/OpenClaw/StatusMenuSessions.swift")
@@ -70,64 +78,72 @@ jobs:
               'let selected = levels.contains(current ?? "") ? current : nil',
               'let selected = levels.contains(current ?? "") ? current ?? "off" : "off"')
           s = s.replace(
-              'let selected = current\n\n        for item in menu.items {',
-              'let selected = menu.items.contains {\n            ($0.representedObject as? [String: String])?["value"] == current\n        } ? current : "off"\n\n        for item in menu.items {',
+              'let selected = current\n',
+              'let selected = menu.items.contains {\n            ($0.representedObject as? [String: String])?["value"] == current\n        } ? current : "off"\n',
               1)
           assert s != before, "base revert did not apply"
           p.write_text(s)
           PY
           fi
-          echo "=== lines after mode (${{ inputs.mode }}) ==="
-          grep -n "let selected" apps/macos/Sources/OpenClaw/StatusMenuSessions.swift | head -5
+          echo "=== lines after mode ($MODE) ==="
+          grep -n "let selected" "$SOURCE" | head -5
+          if [ "$MODE" = "base" ]; then
+            grep -q 'current ?? "off" : "off"' "$SOURCE" || { echo "::error::base mode did not manufacture the Off fallback"; exit 1; }
+          else
+            grep -q 'levels.contains(current ?? "") ? current : nil' "$SOURCE" || { echo "::error::head mode is not the fixed shape"; exit 1; }
+            grep -q 'let selected = current$' "$SOURCE" || { echo "::error::head mode still has the update-path fallback"; exit 1; }
+          fi
           echo "=== git diff stat ==="
           git diff --stat
 
       - name: Build package tests
         working-directory: openclaw
-        continue-on-error: true
         run: |
-          set +e
+          set -o pipefail
           swift build --package-path apps/macos --build-system native --build-tests 2>&1 | tee /tmp/build-${{ inputs.mode }}.log
-          echo "BUILD_EXIT=${PIPESTATUS[0]}" | tee -a /tmp/build-${{ inputs.mode }}.log
 
-      - name: Run status menu probe
+      - name: Run status menu probe (asserts expected checkmarks)
         working-directory: openclaw
-        timeout-minutes: 8
-        continue-on-error: true
+        timeout-minutes: 12
         env:
           PROBE_OUT_DIR: /tmp/probe-out
           PROBE_MODE: ${{ inputs.mode }}
         run: |
-          set +e
           mkdir -p /tmp/probe-out
+          set -o pipefail
           swift test --package-path apps/macos --build-system native --filter StatusMenuProbe 2>&1 | tee /tmp/probe-${{ inputs.mode }}.log
-          echo "PROBE_EXIT=${PIPESTATUS[0]}" | tee -a /tmp/probe-${{ inputs.mode }}.log
 
-      - name: Run focused regression (PR's added test)
+      - name: Run focused regression (exit code asserted per mode)
         working-directory: openclaw
-        continue-on-error: true
+        env:
+          MODE: ${{ inputs.mode }}
         run: |
+          set -o pipefail
           set +e
-          swift test --package-path apps/macos --build-system native --filter "StatusMenuSummariesTests" 2>&1 | tee /tmp/regression-${{ inputs.mode }}.log
-          echo "REGRESSION_EXIT=${PIPESTATUS[0]}" | tee -a /tmp/regression-${{ inputs.mode }}.log
+          swift test --package-path apps/macos --build-system native --filter "StatusMenuSummariesTests" 2>&1 | tee /tmp/regression-$MODE.log
+          EXIT=${PIPESTATUS[0]}
+          echo "REGRESSION_EXIT=$EXIT" | tee -a /tmp/regression-$MODE.log
+          if [ "$MODE" = "base" ]; then
+            [ "$EXIT" -ne 0 ] || { echo "::error::base regression passed; the reverted branch should fail the new test"; exit 1; }
+          else
+            [ "$EXIT" -eq 0 ] || { echo "::error::head regression failed"; exit 1; }
+          fi
 
       - name: Collect
-        if: always()
+        if: ${{ always() }}
         run: |
           echo "=== BUILD tail (${{ inputs.mode }}) ==="
           tail -25 /tmp/build-${{ inputs.mode }}.log 2>/dev/null || true
           echo "=== PROBE key lines (${{ inputs.mode }}) ==="
-          grep -E "PROBE |SCENARIO |SUBMENU |ITEM |ANY_ON |CAPTURE |PROBE_DONE|BUILD_EXIT|PROBE_EXIT|error:|Test Suite|passed|failed" /tmp/probe-${{ inputs.mode }}.log 2>/dev/null | head -120 || true
+          grep -E "PROBE |SCENARIO |SUBMENU |ITEM |ANY_ON |CHECK |PROBE_DONE|error:|Test Suite|passed|failed" /tmp/probe-${{ inputs.mode }}.log 2>/dev/null | head -160 || true
           echo "=== REGRESSION key lines (${{ inputs.mode }}) ==="
           grep -E "Test Suite|passed|failed|error:|REGRESSION_EXIT|inherits the agent default" /tmp/regression-${{ inputs.mode }}.log 2>/dev/null | head -40 || true
-          ls -la /tmp/probe-out || true
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ always() }}
         with:
           name: status-menu-proof-${{ inputs.mode }}
           path: |
             /tmp/build-${{ inputs.mode }}.log
             /tmp/probe-${{ inputs.mode }}.log
             /tmp/regression-${{ inputs.mode }}.log
-            /tmp/probe-out
