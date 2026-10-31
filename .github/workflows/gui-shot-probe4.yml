@@ -1,0 +1,81 @@
+name: GUI menu capture paths probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    steps:
+      - name: Try capture paths
+        run: |
+          mkdir -p /tmp/shot4
+          cat > /tmp/p4.swift <<'SWIFT'
+          import AppKit
+          import CoreGraphics
+
+          let app = NSApplication.shared
+          app.setActivationPolicy(.accessory)
+          let statusItem = NSStatusBar.system.statusItem(withLength: 60)
+          statusItem.button?.title = "OC"
+          let menu = NSMenu()
+          menu.showsStateColumn = true
+          for title in ["Off", "Minimal", "Low", "Medium", "High"] {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.state = .off
+            menu.addItem(item)
+          }
+          statusItem.menu = menu
+
+          func save(_ img: CGImage?, _ path: String, _ label: String) {
+            guard let img else { print("NIL \(label)"); return }
+            let rep = NSBitmapImageRep(cgImage: img)
+            guard let data = rep.representation(using: NSBitmapImageRep.FileType.png, properties: [:]) else {
+              print("PNGFAIL \(label)"); return
+            }
+            try? data.write(to: URL(fileURLWithPath: path))
+            print("OK \(label) px=\(rep.pixelsWide)x\(rep.pixelsHigh) bytes=\(data.count)")
+          }
+
+          let timer = Timer(timeInterval: 1.5, repeats: false) { _ in
+            let popups = NSApp.windows.filter { String(describing: type(of: $0)).contains("PopupMenu") }
+            guard let win = popups.last else { print("NO_POPUP"); exit(1) }
+            let wid = CGWindowID(win.windowNumber)
+            print("POPUP frame=\(win.frame) number=\(wid) alpha=\(win.alphaValue) visible=\(win.isVisible) occl=\(win.occlusionState.rawValue)")
+            // A: CGWindowListCreateImage of own window
+            save(CGWindowListCreateImage(CGRect.null, [.optionIncludingWindow], wid, [.bestResolution]), "/tmp/shot4/a-window.png", "A_CGWINDOW")
+            // B: full display
+            if let disp = CGMainDisplayID() as CGDirectDisplayID? {
+              save(CGDisplayCreateImage(disp), "/tmp/shot4/b-display.png", "B_DISPLAY")
+            }
+            // C: pdf of window content
+            if let v = win.contentView {
+              let pdf = v.dataWithPDF(inside: v.bounds)
+              print("C_PDF bytes=\(pdf.count)")
+              try? pdf.write(to: URL(fileURLWithPath: "/tmp/shot4/c-view.pdf"))
+            }
+            // D: screencapture window mode
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            p.arguments = ["-x", "-o", "-l", String(wid), "/tmp/shot4/d-screencapture-window.png"]
+            do { try p.run(); p.waitUntilExit() } catch { print("D_FAIL \(error)") }
+            print("D_EXIT \(p.terminationStatus)")
+            menu.cancelTrackingWithoutAnimation()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(0) }
+          }
+          RunLoop.main.add(timer, forMode: .common)
+          DispatchQueue.main.async {
+            menu.popUp(positioning: nil, at: NSPoint(x: 200, y: 300), in: nil)
+          }
+          DispatchQueue.global().asyncAfter(deadline: .now() + 10) { print("WATCHDOG"); exit(0) }
+          app.run()
+          SWIFT
+          swiftc -O /tmp/p4.swift -o /tmp/p4 2>&1 | tail -3
+          /tmp/p4 2>&1 | tee /tmp/shot4/p4.log
+          ls -l /tmp/shot4
+
+      - uses: actions/upload-artifact@v4
+        if: always
+        with:
+          name: gui-capture-probe
+          path: /tmp/shot4
