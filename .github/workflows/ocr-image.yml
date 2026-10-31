@@ -15,7 +15,7 @@ jobs:
           pwd; ls -la; git ls-tree HEAD probe/ | head -20; git rev-parse HEAD
           curl -sSL "${{ inputs.url }}" -o /tmp/image.png
           file /tmp/image.png
-          swiftc -O proof/ocr-url.swift -o /tmp/ocr-url
+          swiftc -O probe/ocr-url.swift -o /tmp/ocr-url
           /tmp/ocr-url /tmp/image.png | tee /tmp/ocr.txt
       - uses: actions/upload-artifact@v4
         with:
