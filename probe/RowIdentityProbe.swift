@@ -75,25 +75,22 @@ struct RowIdentityProbe {
         return (try? data.write(to: URL(fileURLWithPath: path))) != nil
     }
 
-    // Walk the real AppKit accessibility tree of the hosting view and collect text.
-    static func accessibilityTexts(_ view: NSView) -> [String] {
+    // Real AX tree of the rendered window, using the repo's own accessibility helper.
+    static func dumpAccessibility(_ view: NSView) async -> [String] {
         var out: [String] = []
-        var visited = 0
-        func walk(_ object: Any) {
-            visited += 1
-            if visited > 4000 { return }
-            guard let element = object as? NSObject else { return }
-            let label = (element.accessibilityLabel?() ?? nil) as String? ?? ""
-            let value = (element.accessibilityValue?() ?? nil) as String? ?? ""
-            let title = (element.accessibilityTitle?() ?? nil) as String? ?? ""
-            for text in [label, value, title] where !text.isEmpty {
-                out.append(text)
+        do {
+            let elements = try await AppKitTestSupport.accessibilityElements(in: view)
+            out.append("AX_ELEMENTS count=\(elements.count)")
+            for element in elements {
+                let role = String(describing: element.accessibilityRole?())
+                let name = AppKitTestSupport.accessibilityName(of: element) ?? ""
+                let value = element.accessibilityValue?().map { String(describing: $0) } ?? ""
+                guard !name.isEmpty || !value.isEmpty else { continue }
+                out.append("AX_EL role=\(role) name=\(name) value=\(value)")
             }
-            if let children = element.accessibilityChildren?() as [Any]? ?? nil {
-                for child in children { walk(child) }
-            }
+        } catch {
+            out.append("AX_ELEMENTS_ERROR \(error)")
         }
-        walk(view)
         return out
     }
 
@@ -162,9 +159,9 @@ struct RowIdentityProbe {
         let stageTwo = Self.writePNG(host, to: "\(outputDir)/\(mode)-stage2.png")
         print("CAPTURE stage2 \(stageTwo)")
 
-        let texts = Self.accessibilityTexts(host)
-        print("AX_TEXTS_BEGIN count=\(texts.count)")
-        for text in texts { print("AX: \(text)") }
+        let texts = await Self.dumpAccessibility(host)
+        print("AX_TEXTS_BEGIN")
+        for text in texts { print(text) }
         print("AX_TEXTS_END")
 
         let ids = store.events.map(\.id)
