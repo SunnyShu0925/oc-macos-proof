@@ -58,6 +58,10 @@ jobs:
         run: |
           PROBE="apps/macos/Tests/OpenClawIPCTests/RowIdentityProbe.swift"
           cp "$GITHUB_WORKSPACE/proofrepo/probe/RowIdentityProbe.swift" "$PROBE"
+          if [ -f "$GITHUB_WORKSPACE/proofrepo/probe/AgentEventsWindowRowIdentityTests.swift" ]; then
+            cp "$GITHUB_WORKSPACE/proofrepo/probe/AgentEventsWindowRowIdentityTests.swift" \
+              "apps/macos/Tests/OpenClawIPCTests/AgentEventsWindowRowIdentityTests.swift"
+          fi
           echo "=== identity line before mode ==="
           grep -n "ForEach(self.store.events" apps/macos/Sources/OpenClaw/AgentEventsWindow.swift
           if [ "${{ inputs.mode }}" = "base" ]; then
@@ -83,7 +87,7 @@ jobs:
           swift build --package-path apps/macos --build-system native --build-tests 2>&1 | tee /tmp/build-${{ inputs.mode }}.log
           echo "BUILD_EXIT=${PIPESTATUS[0]}" | tee -a /tmp/build-${{ inputs.mode }}.log
 
-      - name: Run row identity probe
+      - name: Run row identity probe and candidate regression
         working-directory: openclaw
         continue-on-error: true
         env:
@@ -92,7 +96,7 @@ jobs:
         run: |
           set +e
           mkdir -p /tmp/probe-out
-          swift test --package-path apps/macos --build-system native --filter RowIdentityProbe 2>&1 | tee /tmp/probe-${{ inputs.mode }}.log
+          swift test --package-path apps/macos --build-system native --filter RowIdentity 2>&1 | tee /tmp/probe-${{ inputs.mode }}.log
           echo "PROBE_EXIT=${PIPESTATUS[0]}" | tee -a /tmp/probe-${{ inputs.mode }}.log
 
       - name: Run focused regression
