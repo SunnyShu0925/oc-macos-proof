@@ -15,11 +15,17 @@ on run argv
 		set clickOff to (item 2 of argv is "1")
 	end try
 
+	set appPid to 0
+	try
+		set appPid to (system attribute "APP_PID") as integer
+	end try
 	set out to ""
 	tell application "System Events"
-		set procs to every process whose name is "OpenClaw"
-		if (count of procs) = 0 then return "NO_OPENCLAW_PROCESS"
-		set p to item 1 of procs
+		set matches to {}
+		if appPid > 0 then set matches to (every process whose unix id is appPid)
+		if (count of matches) = 0 then set matches to (every process whose name contains "OpenClaw")
+		if (count of matches) = 0 then return "NO_OPENCLAW_PROCESS"
+		set p to item 1 of matches
 		tell p
 			set frontmost to true
 			delay 0.8
@@ -27,30 +33,53 @@ on run argv
 			try
 				key code 53
 			end try
-			delay 0.8
-			if (count of menu bars) < 2 then return "NO_MENUBAR2"
+			delay 1
+			set out to out & "MENUBARS=" & (count of menu bars as string) & linefeed
+			if (count of menu bars) < 2 then return out & "NO_MENUBAR2"
 			set si to menu bar item 1 of menu bar 2
-			click si
-			delay 2
-			set m to menu 1 of si
-			set out to out & "ROOT_ITEMS=" & ((name of every menu item of m) as string) & linefeed
+
+			-- The menu is a popup: its items only exist while it is on screen.
+			set rootNames to ""
+			repeat with attempt from 1 to 10
+				try
+					set m to menu 1 of si
+					set rootNames to (name of every menu item of m) as string
+				end try
+				if rootNames is not "" then exit repeat
+				try
+					click si
+				end try
+				delay 2
+			end repeat
+			if rootNames is "" then return out & "MENU_NOT_OPEN" & linefeed
+			set out to out & "ROOT_ITEMS=" & rootNames & linefeed
 
 			-- A session row is the item whose submenu owns the Thinking item.
+			-- Session rows arrive after the gateway answers, so poll.
 			set sessionIndex to 0
-			repeat with i from 1 to (count of menu items of m)
-				try
-					set candidate to menu 1 of (menu item i of m)
-					set candidateNames to (name of every menu item of candidate) as string
-					if candidateNames contains targetTitle then
-						set sessionIndex to i
-						exit repeat
-					end if
-				end try
+			set sessionNames to ""
+			repeat with attempt from 1 to 12
+				set m to menu 1 of si
+				set rootNames to (name of every menu item of m) as string
+				repeat with i from 1 to (count of menu items of m)
+					try
+						set candidate to menu 1 of (menu item i of m)
+						set candidateNames to (name of every menu item of candidate) as string
+						if candidateNames contains targetTitle then
+							set sessionIndex to i
+							set sessionNames to candidateNames
+							exit repeat
+						end if
+					end try
+				end repeat
+				if sessionIndex > 0 then exit repeat
+				delay 2
 			end repeat
 			if sessionIndex = 0 then return out & "NO_SESSION_ITEM" & linefeed
 
 			set sessionItem to menu item sessionIndex of m
-			set out to out & "SESSION_ROW=" & sessionIndex & " name=" & (name of sessionItem as string) & linefeed
+			set out to out & "ROOT_ITEMS_AT_CLICK=" & rootNames & linefeed
+			set out to out & "SESSION_ROW=" & sessionIndex & " items=" & sessionNames & linefeed
 			click sessionItem
 			delay 1.5
 			set sessionMenu to menu 1 of sessionItem
