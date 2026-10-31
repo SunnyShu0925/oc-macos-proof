@@ -1,0 +1,83 @@
+name: GUI menu window probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    steps:
+      - name: Menu window bounds + capture
+        run: |
+          mkdir -p /tmp/shot2
+          cat > /tmp/menuprobe.swift <<'SWIFT'
+          import AppKit
+          import CoreGraphics
+
+          let pid = ProcessInfo.processInfo.processIdentifier
+          let app = NSApplication.shared
+          app.setActivationPolicy(.accessory)
+
+          let statusItem = NSStatusBar.system.statusItem(withLength: 60)
+          statusItem.button?.title = "OC"
+          let menu = NSMenu()
+          let thinking = NSMenu()
+          for (title, on) in [("Off", false), ("Minimal", false), ("Low", false), ("Medium", false), ("High", false)] {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.state = on ? .on : .off
+            item.representedObject = ["value": title.lowercased()]
+            thinking.addItem(item)
+          }
+          thinking.showsStateColumn = true
+          let thinkingItem = NSMenuItem(title: "Thinking", action: nil, keyEquivalent: "")
+          thinkingItem.submenu = thinking
+          thinkingItem.identifier = NSUserInterfaceItemIdentifier("session.thinking")
+          menu.addItem(thinkingItem)
+          statusItem.menu = menu
+
+          func dumpWindows(_ tag: String) {
+            let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+            for w in info {
+              let ownerPid = w[kCGWindowOwnerPID as String] as? Int ?? -1
+              guard ownerPid == Int(pid) else { continue }
+              let b = w[kCGWindowBounds as String] as? [String: Any] ?? [:]
+              let layer = w[kCGWindowLayer as String] as? Int ?? -1
+              let num = w[kCGWindowNumber as String] as? Int ?? -1
+              print("OWNWIN tag=\(tag) num=\(num) layer=\(layer) bounds=\(b)")
+            }
+            print("NSAPP_WINDOWS tag=\(tag) count=\(NSApp.windows.count) classes=\(NSApp.windows.map { String(describing: type(of: $0)) })")
+          }
+
+          let timer = Timer(timeInterval: 1.5, repeats: false) { _ in
+            dumpWindows("open")
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            p.arguments = ["-x", "/tmp/shot2/menu.png"]
+            try? p.run(); p.waitUntilExit()
+            print("SHOT_EXIT=\(p.terminationStatus)")
+            for (i, item) in thinking.items.enumerated() {
+              print("MENUITEM idx=\(i) title=\(item.title) state=\(item.state == .on ? "ON" : "off")")
+            }
+            menu.cancelTrackingWithoutAnimation()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { exit(0) }
+          }
+          RunLoop.main.add(timer, forMode: .common)
+
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            print("OPENING")
+            statusItem.button?.performClick(nil)
+          }
+          DispatchQueue.global().asyncAfter(deadline: .now() + 8) { print("WATCHDOG_EXIT"); exit(0) }
+          app.run()
+          SWIFT
+          swiftc -O /tmp/menuprobe.swift -o /tmp/menuprobe 2>&1 | tail -5
+          /tmp/menuprobe > /tmp/shot2/probe.log 2>&1 &
+          sleep 14
+          cat /tmp/shot2/probe.log
+          ls -l /tmp/shot2
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-menu-probe
+          path: /tmp/shot2
