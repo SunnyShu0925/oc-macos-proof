@@ -1,0 +1,277 @@
+name: shipped-app-events-v17
+'on':
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: PR head branch
+        required: true
+        default: fix/agent-events-window-id-187608
+      mode:
+        description: head or base
+        required: true
+        default: head
+jobs:
+  proof:
+    runs-on: macos-latest
+    timeout-minutes: 150
+    env:
+      APP_BUNDLE_ID: ai.openclaw.mac.debug
+      APP_EXEC: dist/OpenClaw.app/Contents/MacOS/OpenClaw
+    steps:
+    - name: Checkout proof harness
+      uses: actions/checkout@v4
+      with:
+        path: proof
+    - name: Checkout PR branch
+      uses: actions/checkout@v4
+      with:
+        repository: SunnyShu0925/openclaw
+        ref: ${{ inputs.pr_branch }}
+        path: openclaw
+    - name: Toolchain
+      run: 'sw_vers
+
+        swift --version
+
+        xcodebuild -version
+
+        '
+    - name: Setup Node + pnpm
+      run: 'corepack enable
+
+        node --version || true
+
+        '
+    - name: Install dependencies
+      working-directory: openclaw
+      timeout-minutes: 25
+      run: pnpm install --frozen-lockfile
+    - name: Prepare apple mermaid assets
+      working-directory: openclaw
+      run: node scripts/prepare-apple-mermaid.mjs
+    - name: Apply mode (base reverts the one-line fix)
+      working-directory: openclaw
+      env:
+        MODE: ${{ inputs.mode }}
+      run: "set -euo pipefail\nSRC=apps/macos/Sources/OpenClaw/AgentEventsWindow.swift\nif [ \"$MODE\" = \"base\" ]; then\n  python3 - \"$SRC\" <<'PY'\nimport sys, pathlib\np = pathlib.Path(sys.argv[1])\ns = p.read_text()\nif \"id: \\\\.id\" not in s:\n    raise SystemExit(\"expected id: \\\\.id in \" + str(p))\np.write_text(s.replace(\"id: \\\\.id\", \"id: \\\\.seq\"))\nprint(\"BASE mode: reverted to id: \\\\.seq\")\nPY\nfi\ngrep -n \"ForEach\" \"$SRC\" | head -3\n"
+    - name: Build plugin assets
+      working-directory: openclaw
+      timeout-minutes: 20
+      run: pnpm plugins:assets:build
+    - name: Package app (ad-hoc)
+      working-directory: openclaw
+      timeout-minutes: 70
+      env:
+        ALLOW_ADHOC_SIGNING: '1'
+        SIGN_IDENTITY: '-'
+        OPENCLAW_PACKAGE_APP_ROOT: ${{ github.workspace }}/openclaw/dist/OpenClaw.app
+      run: 'set -euo pipefail
+
+        mkdir -p "$HOME/.openclaw"
+
+        touch "$HOME/.openclaw/disable-launchagent"
+
+        ./scripts/package-mac-app.sh 2>&1 | tail -80
+
+        ls -la "$APP_EXEC"
+
+        plutil -p dist/OpenClaw.app/Contents/Info.plist | grep -E ''CFBundleIdentifier|LSUIElement'' || true
+
+        codesign -dv dist/OpenClaw.app 2>&1 | head -5 || true
+
+        '
+    - name: Write config + stub model + start Gateway
+      working-directory: openclaw
+      run: "set -euo pipefail\nmkdir -p \"$HOME/.openclaw\"\ncat > \"$HOME/.openclaw/openclaw.json\" <<'JSON'\n{\n  \"gateway\": { \"mode\": \"local\", \"port\": 18789, \"auth\": { \"mode\": \"none\" } },\n  \"models\": {\n    \"providers\": {\n      \"stub\": {\n        \"baseUrl\": \"http://127.0.0.1:18999/v1\",\n        \"api\": \"openai-completions\",\n        \"apiKey\": \"stub-key\",\n        \"models\": [\n          {\n            \"id\": \"stub-1\",\n            \"name\": \"Stub 1\",\n            \"compat\": { \"supportsTools\": false, \"requiresStringContent\": true, \"strictMessageKeys\": true }\n          }\n        ]\n      }\n    }\n  },\n  \"agents\": { \"defaults\": { \"model\": { \"primary\": \"stub/stub-1\" } }, \"entries\": { \"main\": {} } }\n}\nJSON\ncat > /tmp/stub-model.mjs <<'JS'\nimport http from \"node:http\";\nconst port = Number(process.env.STUB_PORT || 18999);\nconst server = http.createServer((req, res) => {\n  let body = \"\";\n  req.on(\"data\", (c) => { body\
+        \ += c; });\n  req.on(\"end\", () => {\n    if (req.url.startsWith(\"/v1/models\")) {\n      res.writeHead(200, { \"content-type\": \"application/json\" });\n      res.end(JSON.stringify({ object: \"list\", data: [{ id: \"stub-1\", object: \"model\" }] }));\n      return;\n    }\n    if (!req.url.includes(\"/chat/completions\")) {\n      res.writeHead(404); res.end(\"not found\"); return;\n    }\n    let parsed = {};\n    try { parsed = JSON.parse(body || \"{}\"); } catch {}\n    const id = \"chatcmpl-stub-\" + Date.now();\n    const created = Math.floor(Date.now() / 1000);\n    const model = parsed.model || \"stub-1\";\n    if (parsed.stream === false) {\n      res.writeHead(200, { \"content-type\": \"application/json\" });\n      res.end(JSON.stringify({\n        id, object: \"chat.completion\", created, model,\n        choices: [{ index: 0, message: { role: \"assistant\", content: \"stub reply\" }, finish_reason: \"stop\" }],\n        usage: { prompt_tokens: 1, completion_tokens:\
+        \ 2, total_tokens: 3 }\n      }));\n      return;\n    }\n    res.writeHead(200, {\n      \"content-type\": \"text/event-stream\",\n      \"cache-control\": \"no-cache\",\n      connection: \"keep-alive\"\n    });\n    const chunk = (delta, finish = null) => \"data: \" + JSON.stringify({\n      id, object: \"chat.completion.chunk\", created, model,\n      choices: [{ index: 0, delta, finish_reason: finish }]\n    }) + \"\\n\\n\";\n    res.write(chunk({ role: \"assistant\", content: \"\" }));\n    res.write(chunk({ content: \"stub reply\" }));\n    res.write(chunk({}, \"stop\"));\n    res.write(\"data: [DONE]\\n\\n\");\n    res.end();\n  });\n});\nserver.listen(port, \"127.0.0.1\", () => console.log(\"stub model listening on \" + port));\nJS\npnpm openclaw doctor --fix > /tmp/doctor.log 2>&1 || true\ntail -25 /tmp/doctor.log || true\nnohup node /tmp/stub-model.mjs > /tmp/stub.log 2>&1 &\nnohup pnpm openclaw gateway run > /tmp/gateway.log 2>&1 &\nfor i in $(seq 1 120); do\n  if nc\
+        \ -z 127.0.0.1 18789 2>/dev/null; then echo \"gateway port open after $((i*5))s\"; break; fi\n  sleep 5\ndone\nnc -z 127.0.0.1 18789 && echo \"PORT_OPEN\" || echo \"PORT_CLOSED_AFTER_WAIT\"\necho \"--- stub ---\"; tail -5 /tmp/stub.log || true\necho \"--- gateway ---\"; tail -30 /tmp/gateway.log || true\npnpm openclaw gateway status || true\n"
+    - name: Enable debug pane + launch packaged app
+      working-directory: openclaw
+      run: "set -x\ndefaults write \"$APP_BUNDLE_ID\" openclaw.debugPaneEnabled -bool true\ndefaults write \"$APP_BUNDLE_ID\" openclaw.onboardingSeen -bool true\ndefaults write \"$APP_BUNDLE_ID\" openclaw.onboardingVersion -int 8\ndefaults read \"$APP_BUNDLE_ID\" openclaw.debugPaneEnabled\ndefaults read \"$APP_BUNDLE_ID\" openclaw.onboardingSeen\npkill -f \"OpenClaw.app/Contents/MacOS/OpenClaw\" || true\nsleep 1\nopen \"$PWD/dist/OpenClaw.app\" --args --attach-only --debug-open-menu\nAPP_PID=\"\"\nfor i in $(seq 1 60); do\n  APP_PID=$(pgrep -f \"OpenClaw.app/Contents/MacOS/OpenClaw\" | head -1)\n  if [ -n \"$APP_PID\" ]; then echo \"APP_UP after ${i}s (pid $APP_PID)\"; break; fi\n  sleep 1\ndone\n[ -n \"$APP_PID\" ] || { echo \"APP_NOT_RUNNING\"; exit 1; }\necho \"APP_PID=$APP_PID\" >> \"$GITHUB_ENV\"\nsleep 8\nps -p \"$APP_PID\" -o pid,comm,args || true\necho \"--- frontmost ---\"\nosascript -e 'tell application \"System Events\" to get name of first process whose frontmost is true' ||\
+        \ true\n"
+    - name: Open Debug -> Open Agent Events (status menu, AX)
+      working-directory: openclaw
+      continue-on-error: true
+      run: 'APP_PID="$APP_PID" osascript "$GITHUB_WORKSPACE/proof/probe/open-agent-events.applescript" 2>&1 | tee /tmp/menu.log
+
+        echo "---"
+
+        screencapture -x /tmp/full-screen-menu.png || true
+
+        file /tmp/full-screen-menu.png || true
+
+        '
+    - name: Approve pending device
+      working-directory: openclaw
+      continue-on-error: true
+      run: "set +e\npnpm openclaw devices list --json > /tmp/devices-before.json 2>&1 || true\ntail -c 1500 /tmp/devices-before.json\npython3 - > /tmp/pending.txt <<'PYDEV'\nimport json, re\nraw = open('/tmp/devices-before.json').read()\nm = re.search(r\"\\{.*\\}\", raw, re.S)\ntry:\n    parsed = json.loads(m.group(0)) if m else {}\nexcept Exception:\n    parsed = {}\nfor p in parsed.get(\"pending\", []) or []:\n    print(p.get(\"requestId\") or p.get(\"id\") or \"\")\nPYDEV\necho \"--- pending ids ---\"; cat /tmp/pending.txt\nwhile read -r rid; do\n  if [ -n \"$rid\" ]; then pnpm openclaw devices approve \"$rid\" 2>&1 | tail -3; fi\ndone < /tmp/pending.txt\nsleep 10\npnpm openclaw devices list --json > /tmp/devices.json 2>&1 || true\ntail -c 1200 /tmp/devices.json\ngrep -o \"client=[a-zA-Z-]*\" /tmp/gateway.log | sort | uniq -c || true\n"
+    - name: Agent turn A
+      working-directory: openclaw
+      continue-on-error: true
+      run: "pnpm openclaw agent --session-id events-a --message \"Reply with the single word: alpha\" --json \\\n  > /tmp/turn-a.json 2>/tmp/turn-a.err || true\nhead -20 /tmp/turn-a.json || true\ntail -10 /tmp/turn-a.err || true\nsleep 3\n"
+    - name: Agent turn B (window already open, same seq numbers)
+      working-directory: openclaw
+      continue-on-error: true
+      run: "pnpm openclaw agent --session-id events-b --message \"Reply with the single word: beta\" --json \\\n  > /tmp/turn-b.json 2>/tmp/turn-b.err || true\nhead -20 /tmp/turn-b.json || true\ntail -10 /tmp/turn-b.err || true\nsleep 5\n"
+    - name: Capture shipped window at several scroll positions
+      continue-on-error: true
+      run: |
+        set +e
+        P="$GITHUB_WORKSPACE/proof/probe"
+        swift "$P/window-capture.swift" 2>&1 | tee /tmp/windows-top.txt
+        WID=$(sed -n 's/^AGENT_EVENTS_WID=//p' /tmp/windows-top.txt | head -1)
+        RECT=$(sed -n 's/^AGENT_EVENTS_RECT=//p' /tmp/windows-top.txt | head -1)
+        echo "top WID=$WID RECT=$RECT"
+        cat > /tmp/grow.applescript <<'AS'
+        tell application "System Events"
+          tell process "OpenClaw"
+            set win to window "Agent Events"
+            perform action "AXRaise" of win
+            set {w, h} to size of win
+            set size of win to {w, 1400}
+            delay 0.8
+            try
+              set position of win to {150, 40}
+            end try
+            delay 0.3
+            return "RESIZED " & (size of win as string)
+          end tell
+        end tell
+        AS
+        cat > /tmp/scrollf.applescript <<'AS'
+        on run argv
+          set frac to item 1 of argv as real
+          tell application "System Events"
+            tell process "OpenClaw"
+              set win to window "Agent Events"
+              set moved to "NO_SCROLLBAR"
+              repeat with e in (entire contents of win)
+                try
+                  if role of e is "AXScrollArea" then
+                    set value of scroll bar 1 of e to frac
+                    set moved to "SET " & (frac as string)
+                  end if
+                end try
+              end repeat
+              return moved
+            end tell
+          end tell
+        end run
+        AS
+        osascript /tmp/grow.applescript 2>&1 | tee /tmp/grow.log
+        sleep 1
+        for f in 0.0 0.2 0.4 0.6 0.8 1.0; do
+          osascript /tmp/scrollf.applescript "$f" 2>&1 | tee "/tmp/scroll-$f.log"
+          sleep 0.6
+          W=$(swift "$P/window-capture.swift" 2>/dev/null | sed -n 's/^AGENT_EVENTS_WID=//p' | head -1)
+          if [ -n "$W" ]; then screencapture -x -o -l "$W" "/tmp/window-$f.png" || true; fi
+          if [ ! -s "/tmp/window-$f.png" ] && [ -n "$RECT" ]; then screencapture -x -R"$RECT" "/tmp/window-$f.png" || true; fi
+          swift "$P/ocr-window.swift" "/tmp/window-$f.png" 2>&1 | tee "/tmp/ocr-$f.txt" || true
+        done
+        swift "$P/scroll-wheel.swift" 460 400 60 2>&1 | tee /tmp/wheel.log
+        sleep 0.8
+        W=$(swift "$P/window-capture.swift" 2>/dev/null | sed -n 's/^AGENT_EVENTS_WID=//p' | head -1)
+        if [ -n "$W" ]; then screencapture -x -o -l "$W" /tmp/window-wheel.png || true; fi
+        swift "$P/ocr-window.swift" /tmp/window-wheel.png 2>&1 | tee /tmp/ocr-wheel.txt || true
+        APP_PID="$APP_PID" osascript "$P/ax-tree.applescript" 2>&1 | tee /tmp/ax-tree.txt
+        echo "--- coverage ---"
+        for f in 0.0 0.2 0.4 0.6 0.8 1.0 wheel; do
+          echo "[$f] $(grep -o 'run [0-9a-f-]\{8,\}' /tmp/ocr-$f.txt | sort -u | tr '\n' ' ')"
+        done
+        echo "--- AX ---"; cat /tmp/ax-tree.txt || true
+    - name: Assert shipped-app proof
+      run: |
+        set -euo pipefail
+        test -s /tmp/window-0.0.png
+        test -s /tmp/window-wheel.png
+        python3 - <<'PY'
+        import re, sys
+
+        UUID = re.compile(r'run\s+([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})')
+
+        def read(path):
+            try:
+                return open(path, errors='replace').read()
+            except FileNotFoundError:
+                return ''
+
+        def ids(text):
+            return sorted(set(u.lower() for u in UUID.findall(text)))
+
+        def flat(text):
+            return text.lower().replace('-', '').replace(' ', '').replace('\n', '')
+
+        ax = ids(read('/tmp/ax-tree.txt'))
+        expected = 1 if '${{ inputs.mode }}' == 'base' else 2
+        print('AX run ids rendered by the shipped window:', ax)
+        if len(ax) != expected:
+            sys.exit('proof failed: expected %d rendered run id(s), saw %r' % (expected, ax))
+
+        shots = {}
+        for name in ['0.0', '0.2', '0.4', '0.6', '0.8', '1.0', 'wheel']:
+            text = flat(read('/tmp/ocr-%s.txt' % name))
+            shots[name] = [u for u in ax if u.replace('-', '') in text]
+            print('OCR %-5s -> %r' % (name, shots[name]))
+        both = [name for name, hits in shots.items() if len(hits) >= 2]
+        visible = sorted({u for hits in shots.values() for u in hits})
+        print('screenshots that show both runs:', both)
+        print('runs visible across screenshots:', visible)
+        if expected == 2 and len(visible) < 2:
+            sys.exit('proof failed: screenshots only ever show %r' % (visible,))
+        print('OK: %d run(s) in the window, %d run(s) visible in screenshots' % (len(ax), len(visible)))
+        PY
+    - name: Collect
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: shipped-app-events-v17-${{ inputs.mode }}
+        path: '/tmp/agent-events-window.png
+
+          /tmp/window-1.0.png
+
+          /tmp/window-wheel.png
+
+          /tmp/ocr-0.0.txt
+
+          /tmp/ocr-1.0.txt
+
+          /tmp/ocr-wheel.txt
+
+          /tmp/ax-tree-top.txt
+
+          /tmp/ax-tree-tall.txt
+
+          /tmp/ax-tree-bottom.txt
+
+          /tmp/rows-top.txt
+
+          /tmp/rows-after.txt
+
+          /tmp/windows-top.txt
+
+          /tmp/windows-tall.txt
+
+          /tmp/grow.log
+
+          /tmp/scroll.log
+
+          /tmp/full-screen.png
+
+          /tmp/menu.log
+
+          /tmp/turn-a.json
+
+          /tmp/turn-b.json
+
+          /tmp/gateway.log
+
+          /tmp/stub.log
+
+          /tmp/doctor.log
+
+          /tmp/devices.json
+
+          /tmp/app.log
+
+          /tmp/window-ocr.txt'
