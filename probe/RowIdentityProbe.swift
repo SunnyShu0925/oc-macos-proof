@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OpenClawProtocol
 import SwiftUI
 import Testing
 @testable import OpenClaw
@@ -28,7 +29,7 @@ struct RowIdentityProbe {
         guard size.width > 0, size.height > 0 else { return "SKIP: empty bounds" }
         let attempts: [(String, () -> Bool)] = [
             ("cacheDisplay", {
-                guard let rep = view.bitmapImageRepForFitting(size) else { return false }
+                guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
                 view.cacheDisplay(in: view.bounds, to: rep)
                 return write(rep, to: path)
             }),
@@ -107,7 +108,7 @@ struct RowIdentityProbe {
             if typeName.contains("ForEach") {
                 lines.append("FOR_EACH type=\(typeName) children=\(childCount) path=\(path)")
                 for (label, child) in mirror.children {
-                    lines.append("  child label=\(label) type=\(String(describing: type(of: child))) value=\(String(describing: child).prefix(200))")
+                    lines.append("  child label=\(label ?? "?") type=\(String(describing: type(of: child))) value=\(String(describing: child).prefix(200))")
                 }
             }
             if depth < 6, childCount > 0, childCount < 24 {
