@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import OpenClawProtocol
+import SwiftUI
 import Testing
 @testable import OpenClaw
 
@@ -42,15 +44,92 @@ struct AgentEventStoreTests {
     }
 }
 
+@Suite(.serialized)
 @MainActor
 struct AgentEventsWindowRowIdentityTests {
     @Test
-    func `keys rows by the globally unique event id`() {
-        // The Gateway restarts seq at 1 for every run, so a seq-keyed ForEach collapses
-        // events from different runs into one row. ForEach takes its row identity as the
-        // second generic argument, and the built window body exposes it: ControlAgentEvent.id
-        // is String, seq is Int. Keying rows by seq renders run-a as Int and loses rows.
-        let bodyType = String(describing: type(of: AgentEventsWindow().body))
-        #expect(bodyType.contains("ForEach<ReversedCollection<Array<ControlAgentEvent>>, String"))
+    func `keeps one row per run when sequence numbers overlap`() async throws {
+        _ = AppKitTestSupport.application
+        // The window renders `AgentEventStore.shared`, so drive the store the app renders.
+        let store = AgentEventStore.shared
+        store.clear()
+        defer { store.clear() }
+        store.append(Self.event(runId: "run-a", seq: 1, stream: "alpha"))
+
+        let host = NSHostingView(rootView: AgentEventsWindow())
+        host.frame = NSRect(x: 0, y: 0, width: 640, height: 520)
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer {
+            window.orderOut(nil)
+            window.contentView = nil
+            window.close()
+        }
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+
+        // Let the first run render, then start a second run that reuses seq=1 while the window
+        // is open. Keying rows by the per-run `seq` makes the renderer reuse the first row, so
+        // the earlier run disappears instead of keeping its own row.
+        _ = try await Self.waitForRows(in: host) { texts in
+            texts.contains { $0.contains("run-a") }
+        }
+        store.append(Self.event(runId: "run-b", seq: 1, stream: "beta"))
+        let texts = try await Self.waitForRows(in: host) { texts in
+            Self.renderedRunIDs(in: texts) == ["run-a", "run-b"]
+        }
+        let rows = Self.renderedRunIDs(in: texts)
+        #expect(rows == ["run-a", "run-b"], "rendered rows: \(rows)")
+    }
+
+    private static func event(runId: String, seq: Int, stream: String) -> ControlAgentEvent {
+        ControlAgentEvent(
+            runId: runId,
+            seq: seq,
+            stream: stream,
+            ts: Double(seq),
+            data: [:] as [String: OpenClawProtocol.AnyCodable],
+            summary: nil)
+    }
+
+    private static func renderedRunIDs(in texts: [String]) -> Set<String> {
+        Set(["run-a", "run-b"].filter { runID in
+            texts.contains { $0.contains(runID) }
+        })
+    }
+
+    private static func waitForRows(
+        in host: NSView,
+        timeout: Duration = .seconds(5),
+        _ predicate: ([String]) -> Bool) async throws -> [String]
+    {
+        var texts: [String] = []
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while ContinuousClock.now < deadline {
+            host.layoutSubtreeIfNeeded()
+            texts = try await Self.accessibilityTexts(in: host)
+            if predicate(texts) { return texts }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        return texts
+    }
+
+    private static func accessibilityTexts(in root: NSView) async throws -> [String] {
+        let elements = try await AppKitTestSupport.accessibilityElements(in: root)
+        return elements.flatMap { element -> [String] in
+            var texts: [String] = []
+            if let name = AppKitTestSupport.accessibilityName(of: element), !name.isEmpty {
+                texts.append(name)
+            }
+            if let value: Any = element.accessibilityValue?() {
+                texts.append(String(describing: value))
+            }
+            return texts
+        }
     }
 }
