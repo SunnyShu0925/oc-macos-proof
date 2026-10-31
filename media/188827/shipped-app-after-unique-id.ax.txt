@@ -1,0 +1,99 @@
+WINDOW=Agent Events
+ELEMENTS=61
+AXGroup :: missing value
+AXStaticText :: Agent Events
+AXButton :: missing value
+AXScrollArea :: missing value
+AXOpaqueProviderGroup :: missing value
+AXStaticText :: LIFECYCLE
+AXStaticText :: run 9d4b19b7-499d-4ca6-b60b-e1b359e8688f
+AXStaticText :: 18:28:28.698
+AXStaticText :: LIFECYCLE
+AXStaticText :: run 9d4b19b7-499d-4ca6-b60b-e1b359e8688f
+AXStaticText :: 18:28:28.681
+AXStaticText :: {
+  "provider" : null,
+  "model" : null,
+  "phase" : "model"
+}
+AXStaticText :: LIFECYCLE
+AXStaticText :: run 9d4b19b7-499d-4ca6-b60b-e1b359e8688f
+AXStaticText :: 18:28:28.655
+AXStaticText :: {
+  "stopReason" : "stop",
+  "endedAt" : 1793471308655,
+  "aborted" : false,
+  "phase" : "finishing",
+  "livenessState" : "working"
+}
+AXStaticText :: USAGE
+AXStaticText :: run 9d4b19b7-499d-4ca6-b60b-e1b359e8688f
+AXStaticText :: 18:28:28.636
+AXStaticText :: ASSISTANT
+AXStaticText :: run 9d4b19b7-499d-4ca6-b60b-e1b359e8688f
+AXStaticText :: 18:28:28.633
+AXStaticText :: {
+  "delta" : "stub reply",
+  "text" : "stub reply",
+  "itemId" : "0b8d1f21-9e12-4c50-a968-aeaadc2dcc0f:1"
+}
+AXStaticText :: LIFECYCLE
+AXStaticText :: run 9d4b19b7-499d-4ca6-b60b-e1b359e8688f
+AXStaticText :: 18:28:28.630
+AXStaticText :: {
+  "model" : "stub-1",
+  "phase" : "model",
+  "provider" : "stub"
+}
+AXStaticText :: LIFECYCLE
+AXStaticText :: run 9d4b19b7-499d-4ca6-b60b-e1b359e8688f
+AXStaticText :: 18:28:28.509
+AXStaticText :: {
+  "phase" : "start",
+  "startedAt" : 1793471308509
+}
+AXStaticText :: LIFECYCLE
+AXStaticText :: run 9fb309f3-285f-4f44-b8c2-4f9784f01e00
+AXStaticText :: 18:28:19.198
+AXStaticText :: LIFECYCLE
+AXStaticText :: run 9fb309f3-285f-4f44-b8c2-4f9784f01e00
+AXStaticText :: 18:28:19.083
+AXStaticText :: {
+  "model" : null,
+  "provider" : null,
+  "phase" : "model"
+}
+AXStaticText :: LIFECYCLE
+AXStaticText :: run 9fb309f3-285f-4f44-b8c2-4f9784f01e00
+AXStaticText :: 18:28:18.986
+AXStaticText :: {
+  "phase" : "finishing",
+  "aborted" : false,
+  "endedAt" : 1793471298986,
+  "livenessState" : "working",
+  "stopReason" : "stop"
+}
+AXStaticText :: USAGE
+AXStaticText :: run 9fb309f3-285f-4f44-b8c2-4f9784f01e00
+AXStaticText :: 18:28:18.953
+AXStaticText :: ASSISTANT
+AXStaticText :: run 9fb309f3-285f-4f44-b8c2-4f9784f01e00
+AXStaticText :: 18:28:18.940
+AXStaticText :: {
+  "text" : "stub reply",
+  "delta" : "stub reply",
+  "itemId" : "c83968bb-7e91-4354-a343-6fde65da5b65:1"
+}
+AXScrollBar :: 0.0
+AXValueIndicator :: 0.0
+AXButton :: missing value
+AXButton :: missing value
+AXButton :: missing value
+AXButton :: missing value
+AXButton :: missing value
+AXButton :: missing value
+AXGroup :: missing value
+AXGroup :: missing value
+AXButton :: missing value
+AXStaticText :: Agent Events
+
