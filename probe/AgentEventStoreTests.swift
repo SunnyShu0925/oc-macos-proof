@@ -40,7 +40,6 @@ struct AgentEventStoreTests {
         #expect(store.events.first?.seq == 2)
         #expect(store.events.last?.seq == 401)
     }
-
 }
 
 @MainActor
