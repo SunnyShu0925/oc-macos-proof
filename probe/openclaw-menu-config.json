@@ -1,0 +1,28 @@
+# Gateway + stub model config for the status-menu proof.
+{
+  "gateway": { "mode": "local", "port": 18789, "auth": { "mode": "none" } },
+  "models": {
+    "providers": {
+      "stub": {
+        "baseUrl": "http://127.0.0.1:18999/v1",
+        "api": "openai-completions",
+        "apiKey": "stub-key",
+        "models": [
+          {
+            "id": "stub-1",
+            "name": "Stub 1",
+            "compat": { "supportsTools": false, "requiresStringContent": true, "strictMessageKeys": true }
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": { "primary": "stub/stub-1" },
+      "thinkingDefault": "high",
+      "verboseDefault": "on"
+    },
+    "entries": { "main": {} }
+  }
+}

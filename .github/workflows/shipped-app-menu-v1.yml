@@ -1,0 +1,180 @@
+name: shipped-app-status-menu-v1
+
+# Proof for openclaw#188938: the shipped macOS app's status menu must show NO
+# checkmark for Thinking/Verbose when the session inherits the agent default
+# (head), and must show Off checked on the base build. Screenshots of the open
+# NSMenu popup are captured with `screencapture -l <window id>`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: PR head branch
+        required: true
+        default: fix/status-menu-off-inherit-default-187607
+      mode:
+        description: head or base
+        required: true
+        default: head
+
+jobs:
+  proof:
+    runs-on: macos-latest
+    timeout-minutes: 180
+    env:
+      APP_BUNDLE_ID: ai.openclaw.mac.debug
+      APP_EXEC: dist/OpenClaw.app/Contents/MacOS/OpenClaw
+    steps:
+      - name: Checkout proof harness
+        uses: actions/checkout@v4
+        with:
+          path: proof
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ inputs.pr_branch }}
+          path: openclaw
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          swift --version
+
+      - name: Setup Node + pnpm
+        run: |
+          corepack enable
+          node --version || true
+
+      - name: Install dependencies
+        working-directory: openclaw
+        timeout-minutes: 25
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare apple mermaid assets
+        working-directory: openclaw
+        run: node scripts/prepare-apple-mermaid.mjs
+
+      - name: Apply mode (base restores the Off fallback)
+        working-directory: openclaw
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          SRC=apps/macos/Sources/OpenClaw/StatusMenuSessions.swift
+          if [ "$MODE" = "base" ]; then
+            python3 "$GITHUB_WORKSPACE/proof/probe/revert-to-base.py" "$SRC"
+          fi
+          grep -n "let selected" "$SRC"
+
+      - name: Build plugin assets
+        working-directory: openclaw
+        timeout-minutes: 20
+        run: pnpm plugins:assets:build
+
+      - name: Package app (ad-hoc)
+        working-directory: openclaw
+        timeout-minutes: 70
+        env:
+          ALLOW_ADHOC_SIGNING: '1'
+          SIGN_IDENTITY: '-'
+          OPENCLAW_PACKAGE_APP_ROOT: ${{ github.workspace }}/openclaw/dist/OpenClaw.app
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.openclaw"
+          touch "$HOME/.openclaw/disable-launchagent"
+          ./scripts/package-mac-app.sh 2>&1 | tail -60
+          ls -la "$APP_EXEC"
+          plutil -p dist/OpenClaw.app/Contents/Info.plist | grep -E 'CFBundleIdentifier|LSUIElement' || true
+
+      - name: Write config + stub model + start Gateway
+        working-directory: openclaw
+        run: |
+          set -euo pipefail
+          PROOF="$GITHUB_WORKSPACE/proof"
+          mkdir -p "$HOME/.openclaw"
+          cp "$PROOF/probe/openclaw-menu-config.json" "$HOME/.openclaw/openclaw.json"
+          pnpm openclaw doctor --fix > /tmp/doctor.log 2>&1 || true
+          nohup node "$PROOF/probe/stub-model.mjs" > /tmp/stub.log 2>&1 &
+          nohup pnpm openclaw gateway run > /tmp/gateway.log 2>&1 &
+          for i in $(seq 1 120); do
+            if nc -z 127.0.0.1 18789 2>/dev/null; then echo "gateway port open after $((i*5))s"; break; fi
+            sleep 5
+          done
+          nc -z 127.0.0.1 18789 && echo "PORT_OPEN" || echo "PORT_CLOSED"
+          tail -20 /tmp/gateway.log || true
+
+      - name: Launch packaged app + approve device
+        working-directory: openclaw
+        run: |
+          set -eu
+          PROOF="$GITHUB_WORKSPACE/proof"
+          defaults write "$APP_BUNDLE_ID" openclaw.debugPaneEnabled -bool true
+          defaults write "$APP_BUNDLE_ID" openclaw.onboardingSeen -bool true
+          defaults write "$APP_BUNDLE_ID" openclaw.onboardingVersion -int 8
+          pkill -f "OpenClaw.app/Contents/MacOS/OpenClaw" || true
+          sleep 1
+          open "$PWD/dist/OpenClaw.app" --args --attach-only
+          APP_PID=""
+          for i in $(seq 1 60); do
+            APP_PID=$(pgrep -f "OpenClaw.app/Contents/MacOS/OpenClaw" | head -1 || true)
+            [ -n "$APP_PID" ] && break
+            sleep 1
+          done
+          echo "APP_PID=$APP_PID"
+          [ -n "$APP_PID" ] || { echo "APP_NOT_RUNNING"; exit 1; }
+          echo "APP_PID=$APP_PID" >> "$GITHUB_ENV"
+          sleep 8
+          pnpm openclaw devices list --json > /tmp/devices-before.json 2>&1 || true
+          python3 "$PROOF/probe/pending-devices.py" > /tmp/pending.txt || true
+          while read -r rid; do
+            [ -n "$rid" ] && pnpm openclaw devices approve "$rid" 2>&1 | tail -2
+          done < /tmp/pending.txt
+          sleep 10
+          pnpm openclaw devices list --json 2>&1 | tail -c 800 || true
+
+      - name: Create a session that inherits the agent defaults
+        working-directory: openclaw
+        continue-on-error: true
+        run: |
+          set +e
+          pnpm openclaw agent --session-id inherit-a --message "Reply with the single word: alpha" --json > /tmp/turn.json 2>/tmp/turn.err || true
+          head -c 600 /tmp/turn.json || true
+          tail -5 /tmp/turn.err || true
+          sleep 6
+          pnpm openclaw sessions list --json 2>&1 | tail -c 1500 || true
+
+      - name: Menu - drill Thinking/Verbose and capture popups
+        continue-on-error: true
+        run: |
+          set +e
+          bash "$GITHUB_WORKSPACE/proof/probe/menu-proof.sh" 2>&1 | tee /tmp/menu-proof.log
+          echo "MENU_PROOF_EXIT=$?"
+
+      - name: Assert menu state from the accessibility dump
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/proof/probe/assert-menu.py" '${{ inputs.mode }}'
+
+      - name: Collect
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shipped-app-menu-${{ inputs.mode }}
+          path: |
+            /tmp/shots
+            /tmp/ax-thinking-fresh.txt
+            /tmp/ax-thinking-reuse.txt
+            /tmp/ax-thinking-click-off.txt
+            /tmp/ax-thinking-off.txt
+            /tmp/ax-verbose-fresh.txt
+            /tmp/popups-*.txt
+            /tmp/ocr-*.txt
+            /tmp/menu-proof.log
+            /tmp/turn.json
+            /tmp/turn.err
+            /tmp/gateway.log
+            /tmp/stub.log
+            /tmp/doctor.log
+            /tmp/devices-before.json
