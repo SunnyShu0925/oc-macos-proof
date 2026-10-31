@@ -21,59 +21,81 @@ struct RowIdentityProbe {
             summary: nil)
     }
 
-    static func writePNG(_ view: NSView, to path: String) -> String {
-        view.layoutSubtreeIfNeeded()
-        view.displayIfNeeded()
-        let scale: CGFloat = 2
-        let size = view.bounds.size
-        guard size.width > 0, size.height > 0 else { return "SKIP: empty bounds" }
-        let attempts: [(String, () -> Bool)] = [
-            ("cacheDisplay", {
-                guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
-                view.cacheDisplay(in: view.bounds, to: rep)
-                return write(rep, to: path)
-            }),
-            ("layer.render", {
-                guard let layer = view.layer else { return false }
-                guard let rep = NSBitmapImageRep(
-                    bitmapDataPlanes: nil,
-                    pixelsWide: Int(size.width * scale),
-                    pixelsHigh: Int(size.height * scale),
-                    bitsPerSample: 8,
-                    samplesPerPixel: 4,
-                    hasAlpha: true,
-                    isPlanar: false,
-                    colorSpaceName: .deviceRGB,
-                    bitmapFormat: [],
-                    bytesPerRow: 0,
-                    bitsPerPixel: 0)
-                else { return false }
-                rep.size = size
-                guard let ctx = NSGraphicsContext(bitmapImageRep: rep) else { return false }
-                NSGraphicsContext.current = ctx
-                ctx.cgContext.scaleBy(x: scale, y: scale)
-                layer.render(in: ctx.cgContext)
-                NSGraphicsContext.current = nil
-                return write(rep, to: path)
-            }),
-            ("dataWithPDF", {
-                let data = view.dataWithPDF(inside: view.bounds)
-                let pdfPath = path.hasSuffix(".png") ? String(path.dropLast(4)) + ".pdf" : path + ".pdf"
-                return (try? data.write(to: URL(fileURLWithPath: pdfPath))) != nil
-            }),
-        ]
-        for (name, attempt) in attempts {
-            if attempt() {
-                let size = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? Int
-                return "OK:\(name) bytes=\(size ?? 0)"
+    static func inkRatio(_ rep: NSBitmapImageRep) -> Double {
+        guard let data = rep.bitmapData else { return 0 }
+        let samples = rep.samplesPerPixel
+        let rowBytes = rep.bytesPerRow
+        let height = rep.pixelsHigh
+        let width = rep.pixelsWide
+        var ink = 0
+        var total = 0
+        for y in stride(from: 0, to: height, by: 2) {
+            let row = data.advanced(by: y * rowBytes)
+            for x in stride(from: 0, to: width, by: 2) {
+                let pixel = row.advanced(by: x * samples)
+                total += 1
+                if samples >= 4 {
+                    if pixel[3] > 8 { ink += 1 }
+                } else if pixel[0] > 8 {
+                    ink += 1
+                }
             }
         }
-        return "FAIL: no capture method worked"
+        return total == 0 ? 0 : Double(ink) / Double(total)
     }
 
-    static func write(_ rep: NSBitmapImageRep, to path: String) -> Bool {
-        guard let data = rep.representation(using: .png, properties: [:]) else { return false }
-        return (try? data.write(to: URL(fileURLWithPath: path))) != nil
+    static func bitmap(_ size: NSSize, scale: CGFloat) -> NSBitmapImageRep? {
+        NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(size.width * scale),
+            pixelsHigh: Int(size.height * scale),
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bitmapFormat: [],
+            bytesPerRow: 0,
+            bitsPerPixel: 0)
+    }
+
+    static func writePNG(_ view: NSView, to path: String) -> String {
+        view.window?.displayIfNeeded()
+        view.layoutSubtreeIfNeeded()
+        view.displayIfNeeded()
+        let size = view.bounds.size
+        guard size.width > 0, size.height > 0 else { return "SKIP: empty bounds" }
+        let scale: CGFloat = 2
+
+        // SwiftUI draws through its layer; cacheDisplay alone yields a blank image here.
+        if let layer = view.layer, let rep = Self.bitmap(size, scale: scale) {
+            rep.size = size
+            if let ctx = NSGraphicsContext(bitmapImageRep: rep) {
+                NSGraphicsContext.current = ctx
+                let cg = ctx.cgContext
+                cg.saveGState()
+                cg.scaleBy(x: scale, y: scale)
+                layer.render(in: cg)
+                cg.restoreGState()
+                NSGraphicsContext.current = nil
+                let ink = Self.inkRatio(rep)
+                if ink > 0.02, let data = rep.representation(using: .png, properties: [:]) {
+                    try? data.write(to: URL(fileURLWithPath: path))
+                    return "OK:layer.render ink=\(String(format: "%.3f", ink)) bytes=\(data.count)"
+                }
+            }
+        }
+
+        if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+            view.cacheDisplay(in: view.bounds, to: rep)
+            let ink = Self.inkRatio(rep)
+            if ink > 0.02, let data = rep.representation(using: .png, properties: [:]) {
+                try? data.write(to: URL(fileURLWithPath: path))
+                return "OK:cacheDisplay ink=\(String(format: "%.3f", ink)) bytes=\(data.count)"
+            }
+            return "FAIL:blank ink=\(String(format: "%.3f", ink))"
+        }
+        return "FAIL: no capture method worked"
     }
 
     // Real AX tree of the rendered window, using the repo's own accessibility helper.
@@ -139,10 +161,12 @@ struct RowIdentityProbe {
         for line in Self.forEachIdentity(body) { print(line) }
         print("FOR_EACH_DUMP_END")
 
-        // Stage 1: one run in the buffer.
-        store.append(Self.event(runId: "run-a", seq: 1, stream: "alpha"))
+        // Stage 1: four rows from run-a.
+        for seq in 1...4 {
+            store.append(Self.event(runId: "run-a", seq: seq, stream: "alpha"))
+        }
         let host = NSHostingView(rootView: AgentEventsWindow())
-        host.frame = NSRect(x: 0, y: 0, width: 760, height: 420)
+        host.frame = NSRect(x: 0, y: 0, width: 760, height: 700)
         let appWindow = NSWindow(
             contentRect: host.frame,
             styleMask: [.titled, .closable],
@@ -150,22 +174,25 @@ struct RowIdentityProbe {
             defer: false)
         appWindow.title = "Agent Events"
         appWindow.contentView = host
-        appWindow.orderFront(nil)
+        appWindow.makeKeyAndOrderFront(nil)
+        appWindow.orderFrontRegardless()
         host.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(400))
-        let stageOne = Self.writePNG(host, to: "\(outputDir)/\(mode)-stage1.png")
-        print("CAPTURE stage1 \(stageOne)")
+        try await Task.sleep(for: .milliseconds(600))
+        print("CAPTURE stage1 \(Self.writePNG(host, to: "\(outputDir)/\(mode)-stage1.png"))")
 
-        // Stage 2: a second run that restarts seq at 1 (the collision the fix targets).
-        store.append(Self.event(runId: "run-b", seq: 1, stream: "beta"))
-        try await Task.sleep(for: .milliseconds(400))
+        // Stage 2: run-b restarts seq at 1, so all four seq values collide with run-a.
+        for seq in 1...4 {
+            store.append(Self.event(runId: "run-b", seq: seq, stream: "beta"))
+        }
+        try await Task.sleep(for: .milliseconds(900))
         host.layoutSubtreeIfNeeded()
-        let stageTwo = Self.writePNG(host, to: "\(outputDir)/\(mode)-stage2.png")
-        print("CAPTURE stage2 \(stageTwo)")
+        print("CAPTURE stage2 \(Self.writePNG(host, to: "\(outputDir)/\(mode)-stage2.png"))")
 
         let texts = await Self.dumpAccessibility(host)
         print("AX_TEXTS_BEGIN")
         for text in texts { print(text) }
+        let joined = texts.joined(separator: "\n")
+        print("AX_TALLY run-a=\(joined.components(separatedBy: "run-a").count - 1) run-b=\(joined.components(separatedBy: "run-b").count - 1) ALPHA=\(joined.components(separatedBy: "ALPHA").count - 1) BETA=\(joined.components(separatedBy: "BETA").count - 1)")
         print("AX_TEXTS_END")
 
         let ids = store.events.map(\.id)
