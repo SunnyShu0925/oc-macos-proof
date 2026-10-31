@@ -1,0 +1,180 @@
+name: Shipped app Agent Events proof (PR 188827)
+
+# Stage 1: build dist/OpenClaw.app from the PR branch, launch it, open
+# Debug -> Open Agent Events through the status menu with System Events, and
+# capture the real window by window id. No gateway yet: the window should be empty.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: PR branch on SunnyShu0925/openclaw
+        required: true
+        default: fix/agent-events-window-id-187608
+      mode:
+        description: "head (fixed) or base (id: \\.seq reverted)"
+        required: true
+        default: head
+
+jobs:
+  proof:
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ inputs.pr_branch }}
+          path: openclaw
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          swift --version
+          xcodebuild -version
+
+      - name: Setup Node + pnpm
+        run: |
+          corepack enable
+          node --version || true
+
+      - name: Install dependencies
+        working-directory: openclaw
+        timeout-minutes: 25
+        run: |
+          pnpm install --frozen-lockfile
+
+      - name: Prepare apple mermaid assets
+        working-directory: openclaw
+        run: node scripts/prepare-apple-mermaid.mjs
+
+      - name: Apply mode (base reverts the one-line fix)
+        working-directory: openclaw
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          SRC=apps/macos/Sources/OpenClaw/AgentEventsWindow.swift
+          if [ "$MODE" = "base" ]; then
+            python3 - "$SRC" <<'PY'
+          import sys, pathlib
+          p = pathlib.Path(sys.argv[1])
+          s = p.read_text()
+          if "id: \\.id" not in s:
+              raise SystemExit("expected id: \\.id in " + str(p))
+          p.write_text(s.replace("id: \\.id", "id: \\.seq"))
+          print("BASE mode: reverted to id: \\.seq")
+          PY
+          fi
+          grep -n "ForEach" "$SRC" | head -3
+
+      - name: Build plugin assets
+        working-directory: openclaw
+        timeout-minutes: 20
+        run: pnpm plugins:assets:build
+
+      - name: Package app (ad-hoc)
+        working-directory: openclaw
+        timeout-minutes: 60
+        env:
+          ALLOW_ADHOC_SIGNING: "1"
+          SIGN_IDENTITY: "-"
+          OPENCLAW_PACKAGE_APP_ROOT: ${{ github.workspace }}/openclaw/dist/OpenClaw.app
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.openclaw"
+          touch "$HOME/.openclaw/disable-launchagent"
+          ./scripts/package-mac-app.sh 2>&1 | tail -60
+          ls -la dist/OpenClaw.app/Contents/MacOS/
+          codesign -dv dist/OpenClaw.app 2>&1 | head -5 || true
+
+      - name: Launch app
+        working-directory: openclaw
+        run: |
+          set -euo pipefail
+          ./dist/OpenClaw.app/Contents/MacOS/OpenClaw --no-activate --background-only \
+            > /tmp/app.log 2>&1 &
+          sleep 25
+          pgrep -fl "OpenClaw.app/Contents/MacOS/OpenClaw" || echo "APP_NOT_RUNNING"
+          echo "--- app log tail ---"
+          tail -30 /tmp/app.log || true
+
+      - name: Enumerate status menu
+        continue-on-error: true
+        run: |
+          osascript <<'AS' 2>&1 || true
+          tell application "System Events"
+            tell process "OpenClaw"
+              get name of every menu bar
+              get name of every menu bar item of menu bar 2
+            end tell
+          end tell
+          AS
+
+      - name: Open Agent Events window
+        continue-on-error: true
+        run: |
+          osascript <<'AS' 2>&1 || true
+          tell application "System Events"
+            tell process "OpenClaw"
+              click menu bar item 1 of menu bar 2
+              delay 1
+              get name of every menu item of menu 1 of menu bar item 1 of menu bar 2
+            end tell
+          end tell
+          AS
+          osascript <<'AS' 2>&1 || true
+          tell application "System Events"
+            tell process "OpenClaw"
+              click menu item "Debug" of menu 1 of menu bar item 1 of menu bar 2
+              delay 1
+              click (first menu item of menu 1 of menu item "Debug" of menu 1 of menu bar item 1 of menu bar 2 whose name starts with "Open Agent Events")
+            end tell
+          end tell
+          AS
+          sleep 3
+
+      - name: Capture window
+        run: |
+          set -euo pipefail
+          cat > /tmp/windowid.swift <<'SWIFT'
+          import CoreGraphics
+          let list = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+          var found = false
+          for w in list {
+            let owner = w[kCGWindowOwnerName as String] as? String ?? ""
+            let name = w[kCGWindowName as String] as? String ?? ""
+            if owner.contains("OpenClaw") {
+              print("WINDOW owner=\(owner) name=\(name) id=\(w[kCGWindowNumber as String] ?? -1) layer=\(w[kCGWindowLayer as String] ?? -1)")
+              if name == "Agent Events" { found = true }
+            }
+          }
+          if !found { print("NO_AGENT_EVENTS_WINDOW") }
+          SWIFT
+          swift /tmp/windowid.swift 2>&1 | tee /tmp/windows.txt
+          WID=$(grep "name=Agent Events" /tmp/windows.txt | sed -n 's/.* id=\([0-9-]*\).*/\1/p' | head -1)
+          echo "captured WID=$WID"
+          if [ -n "$WID" ]; then
+            screencapture -x -o -l "$WID" /tmp/agent-events-window.png || true
+            file /tmp/agent-events-window.png || true
+          fi
+          osascript <<'AS' 2>&1 || true
+          tell application "System Events"
+            tell process "OpenClaw"
+              if exists window "Agent Events" then
+                get value of every static text of window "Agent Events"
+              end if
+            end tell
+          end tell
+          AS
+
+      - name: Collect
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shipped-app-events-${{ inputs.mode }}
+          path: |
+            /tmp/agent-events-window.png
+            /tmp/app.log
+            /tmp/windows.txt
