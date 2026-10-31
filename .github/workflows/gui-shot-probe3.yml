@@ -1,0 +1,94 @@
+name: GUI menu render probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    steps:
+      - name: Render real NSMenu offscreen
+        run: |
+          mkdir -p /tmp/shot3
+          cat > /tmp/render.swift <<'SWIFT'
+          import AppKit
+
+          let app = NSApplication.shared
+          app.setActivationPolicy(.accessory)
+
+          func buildSubmenu(states: [String: NSControl.StateValue]) -> NSMenu {
+            let m = NSMenu()
+            m.showsStateColumn = true
+            for title in ["Off", "Minimal", "Low", "Medium", "High"] {
+              let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+              item.state = states[title] ?? .off
+              item.representedObject = ["value": title.lowercased()]
+              m.addItem(item)
+            }
+            return m
+          }
+          func buildBigSubmenu(states: [String: NSControl.StateValue]) -> NSMenu {
+            let m = NSMenu()
+            m.showsStateColumn = true
+            for title in ["On", "Off"] {
+              let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+              item.state = states[title] ?? .off
+              m.addItem(item)
+            }
+            return m
+          }
+
+          func savePNG(of view: NSView, to path: String, label: String) {
+            let bounds = view.bounds
+            print("SAVE label=\(label) bounds=\(bounds) cls=\(type(of: view))")
+            if let rep = view.bitmapImageRepForDrawing(in: bounds) {
+              view.cacheDisplay(in: bounds, to: rep)
+              if let data = rep.representation(using: .png, properties: [:]) {
+                try? data.write(to: URL(fileURLWithPath: path))
+                print("SAVE_OK label=\(label) png bytes=\(data.count) px=\(rep.pixelsWide)x\(rep.pixelsHigh)")
+              } else { print("SAVE_FAIL png label=\(label)") }
+            } else { print("SAVE_FAIL rep label=\(label)") }
+            let pdf = view.dataWithPDF(inside: bounds)
+            print("PDF label=\(label) bytes=\(pdf.count)")
+            if let img = NSImage(data: pdf) {
+              print("PDF_IMAGE label=\(label) size=\(img.size)")
+            }
+          }
+
+          func popAndSnapshot(_ menu: NSMenu, path: String, label: String) {
+            let timer = Timer(timeInterval: 1.2, repeats: false) { _ in
+              let popups = NSApp.windows.filter { String(describing: type(of: $0)).contains("PopupMenu") }
+              print("POPUP_WINDOWS label=\(label) count=\(popups.count) frames=\(popups.map { $0.frame })")
+              if let win = popups.first, let view = win.contentView {
+                savePNG(of: view, to: path, label: label)
+              }
+              menu.cancelTrackingWithoutAnimation()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            menu.popUp(positioning: nil, at: NSPoint(x: 200, y: 300), in: nil)
+            print("POPUP_DONE label=\(label)")
+          }
+
+          // 1. inherited: nothing checked
+          popAndSnapshot(buildSubmenu(states: [:]), path: "/tmp/shot3/thinking-inherited.png", label: "thinking-inherited")
+          // 2. explicit high: High checked
+          popAndSnapshot(buildSubmenu(states: ["High": .on]), path: "/tmp/shot3/thinking-high.png", label: "thinking-high")
+          // 3. verbose inherited
+          popAndSnapshot(buildBigSubmenu(states: [:]), path: "/tmp/shot3/verbose-inherited.png", label: "verbose-inherited")
+
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { exit(0) }
+          app.run()
+          SWIFT
+          swiftc -O /tmp/render.swift -o /tmp/render 2>&1 | tail -5
+          /tmp/render 2>&1 | tee /tmp/shot3/render.log
+          ls -l /tmp/shot3
+          for f in /tmp/shot3/*.png; do
+            echo "--- $f"
+            sips -g pixelWidth -g pixelHeight "$f" 2>/dev/null | tail -2
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-render-probe
+          path: /tmp/shot3
