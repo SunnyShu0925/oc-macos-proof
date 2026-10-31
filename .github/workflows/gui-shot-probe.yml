@@ -1,0 +1,122 @@
+name: GUI screenshot probe (menu bar capture feasibility)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    steps:
+      - name: Session info
+        run: |
+          sw_vers
+          echo "console user: $(stat -f '%Su' /dev/console)"
+          whoami
+          echo "SSH? ${SSH_CONNECTION:-none}"
+          launchctl print gui/$(id -u)/com.apple.WindowServer 2>/dev/null | head -3 || true
+
+      - name: Screenshot desktop
+        run: |
+          mkdir -p /tmp/shot
+          /usr/sbin/screencapture -x /tmp/shot/desktop.png; echo "SHOT_EXIT=$?"
+          ls -l /tmp/shot || true
+
+      - name: Window list
+        run: |
+          cat > /tmp/wins.swift <<'SWIFT'
+          import CoreGraphics
+          import Foundation
+          let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+          print("ONSCREEN_WINDOWS=\(info.count)")
+          for w in info.prefix(12) {
+            let owner = w[kCGWindowOwnerName as String] as? String ?? "?"
+            let name = w[kCGWindowName as String] as? String ?? "<no-name-needs-screen-recording>"
+            let layer = w[kCGWindowLayer as String] as? Int ?? -1
+            print("WIN owner=\(owner) name=\(name) layer=\(layer)")
+          }
+          SWIFT
+          swift /tmp/wins.swift
+
+      - name: Status item app + capture while menu open
+        run: |
+          mkdir -p /tmp/shot
+          cat > /tmp/menubar.swift <<'SWIFT'
+          import AppKit
+
+          let app = NSApplication.shared
+          app.setActivationPolicy(.accessory)
+
+          let statusItem = NSStatusBar.system.statusItem(withLength: 60)
+          statusItem.button?.title = "OC"
+          let menu = NSMenu()
+          let thinking = NSMenu()
+          for (title, state) in [("Off", NSControl.StateValue.off), ("Minimal", .off), ("High", .off)] {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.state = state
+            thinking.addItem(item)
+          }
+          let thinkingItem = NSMenuItem(title: "Thinking", action: nil, keyEquivalent: "")
+          thinkingItem.submenu = thinking
+          menu.addItem(thinkingItem)
+          statusItem.menu = menu
+
+          print("STATUSBAR button=\(statusItem.button != nil) screens=\(NSScreen.screens.count) main=\(NSScreen.main?.frame.debugDescription ?? "nil")")
+
+          DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            p.arguments = ["-x", "/tmp/shot/menu-open.png"]
+            try? p.run()
+            p.waitUntilExit()
+            print("MENU_SHOT_EXIT=\(p.terminationStatus)")
+          }
+          DispatchQueue.global().asyncAfter(deadline: .now() + 6.0) {
+            print("FORCED_EXIT")
+            exit(0)
+          }
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            print("OPENING_MENU")
+            statusItem.button?.performClick(nil)
+            print("MENU_CLOSED")
+          }
+          app.run()
+          SWIFT
+          swiftc -O /tmp/menubar.swift -o /tmp/menubar 2>&1 | tail -5
+          /tmp/menubar > /tmp/shot/menubar.log 2>&1 &
+          APP_PID=$!
+          sleep 12
+          kill $APP_PID 2>/dev/null || true
+          cat /tmp/shot/menubar.log
+          ls -l /tmp/shot
+
+      - name: Analyze images
+        if: always()
+        run: |
+          cat > /tmp/analyze.swift <<'SWIFT'
+          import AppKit
+          for path in CommandLine.arguments.dropFirst() {
+            guard let rep = NSBitmapImageRep(contentsOf: URL(fileURLWithPath: path)) else {
+              print("LOAD_FAIL \(path)"); continue
+            }
+            let w = rep.pixelsWide, h = rep.pixelsHigh
+            var sum = 0.0, n = 0
+            var distinct = Set<UInt32>()
+            for y in stride(from: 0, to: h, by: max(1, h / 60)) {
+              for x in stride(from: 0, to: w, by: max(1, w / 60)) {
+                guard let c = rep.colorAt(x: x, y: y) else { continue }
+                sum += (c.redComponent + c.greenComponent + c.blueComponent) / 3.0
+                let key = UInt32(c.redComponent * 255) << 16 | UInt32(c.greenComponent * 255) << 8 | UInt32(c.blueComponent * 255)
+                distinct.insert(key)
+                n += 1
+              }
+            }
+            print("IMG \(path) size=\(w)x\(h) mean=\(String(format: "%.3f", n > 0 ? sum / Double(n) : -1)) distinct=\(distinct.count)")
+          }
+          SWIFT
+          swift /tmp/analyze.swift /tmp/shot/desktop.png /tmp/shot/menu-open.png 2>&1 | tail -10
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-shot-probe
+          path: /tmp/shot
