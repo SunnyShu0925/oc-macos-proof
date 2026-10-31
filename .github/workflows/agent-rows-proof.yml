@@ -110,7 +110,7 @@ jobs:
       - name: Capture SwiftUI duplicate-id diagnostics
         if: always()
         run: |
-          log show --last 25m --style compact --predicate 'eventMessage CONTAINS "occurs multiple times"' 2>/dev/null | tee /tmp/swiftui-duplicate-id-${{ inputs.mode }}.log | head -20 || true
+          log show --last 25m --style compact --predicate 'eventMessage CONTAINS "occurs multiple times" AND process != "log"' 2>/dev/null | tee /tmp/swiftui-duplicate-id-${{ inputs.mode }}.log | head -20 || true
           echo "DUPLICATE_ID_LINES=$(grep -c 'occurs multiple times' /tmp/swiftui-duplicate-id-${{ inputs.mode }}.log 2>/dev/null || echo 0)" | tee -a /tmp/swiftui-duplicate-id-${{ inputs.mode }}.log
 
       - name: Collect

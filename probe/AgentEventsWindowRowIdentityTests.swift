@@ -60,7 +60,8 @@ struct AgentEventsWindowRowIdentityTests {
         try await AppKitTestSupport.accessibilityElements(in: view)
             .map { element in
                 let name = AppKitTestSupport.accessibilityName(of: element) ?? ""
-                let value = element.accessibilityValue?() as? String ?? ""
+                let rawValue: Any? = element.accessibilityValue?()
+                let value = rawValue as? String ?? ""
                 return "\(name) \(value)"
             }
             .joined(separator: "\n")

@@ -107,7 +107,8 @@ struct RowIdentityProbe {
             for element in elements {
                 let role = String(describing: element.accessibilityRole?())
                 let name = AppKitTestSupport.accessibilityName(of: element) ?? ""
-                let value = element.accessibilityValue?().map { String(describing: $0) } ?? ""
+                let rawValue: Any? = element.accessibilityValue?()
+                let value = rawValue.map { String(describing: $0) } ?? ""
                 guard !name.isEmpty || !value.isEmpty else { continue }
                 out.append("AX_EL role=\(role) name=\(name) value=\(value)")
             }
