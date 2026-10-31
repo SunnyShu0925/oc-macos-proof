@@ -68,7 +68,7 @@ struct StatusMenuProbe {
                         let thinkingField = boxedThinking.map { #""thinkingLevel":"\#($0)""# } ?? ""
                         let verboseField = boxedVerbose.map { #""verboseLevel":"\#($0)""# } ?? ""
                         let extras = [thinkingField, verboseField].filter { !$0.isEmpty }.joined(separator: ",")
-                        let extraClause = extras.isEmpty ? "" : ",\#(extras)"
+                        let extraClause = extras.isEmpty ? "" : ",\(extras)"
                         payload = #"""
                         {"path":"/synthetic/\#(owner)/sessions.json","sessions":[
                         {"key":"main","displayName":"Gateway \#(owner)","kind":"direct"\#(extraClause)}]}
