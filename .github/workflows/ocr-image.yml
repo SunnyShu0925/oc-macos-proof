@@ -12,6 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
+          pwd; ls -la; git ls-tree HEAD probe/ | head -20; git rev-parse HEAD
           curl -sSL "${{ inputs.url }}" -o /tmp/image.png
           file /tmp/image.png
           swiftc -O proof/ocr-url.swift -o /tmp/ocr-url
