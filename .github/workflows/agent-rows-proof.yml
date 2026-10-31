@@ -107,6 +107,12 @@ jobs:
           swift test --package-path apps/macos --build-system native --filter AgentEventStoreTests 2>&1 | tee /tmp/regression-${{ inputs.mode }}.log
           echo "REGRESSION_EXIT=${PIPESTATUS[0]}" | tee -a /tmp/regression-${{ inputs.mode }}.log
 
+      - name: Capture SwiftUI duplicate-id diagnostics
+        if: always()
+        run: |
+          log show --last 25m --style compact --predicate 'eventMessage CONTAINS "occurs multiple times"' 2>/dev/null | tee /tmp/swiftui-duplicate-id-${{ inputs.mode }}.log | head -20 || true
+          echo "DUPLICATE_ID_LINES=$(grep -c 'occurs multiple times' /tmp/swiftui-duplicate-id-${{ inputs.mode }}.log 2>/dev/null || echo 0)" | tee -a /tmp/swiftui-duplicate-id-${{ inputs.mode }}.log
+
       - name: Collect
         if: always()
         run: |
@@ -126,4 +132,5 @@ jobs:
             /tmp/build-${{ inputs.mode }}.log
             /tmp/probe-${{ inputs.mode }}.log
             /tmp/regression-${{ inputs.mode }}.log
+            /tmp/swiftui-duplicate-id-${{ inputs.mode }}.log
             /tmp/probe-out
