@@ -49,7 +49,8 @@ struct AgentEventStoreTests {
 struct AgentEventsWindowRowIdentityTests {
     @Test
     func `keeps one row per run when sequence numbers overlap`() async throws {
-        _ = AppKitTestSupport.application
+        // The window must process the second run's update, so run the AppKit event loop.
+        try await AppKitTestSupport.startApplication()
         // The window renders `AgentEventStore.shared`, so drive the store the app renders.
         let store = AgentEventStore.shared
         store.clear()
