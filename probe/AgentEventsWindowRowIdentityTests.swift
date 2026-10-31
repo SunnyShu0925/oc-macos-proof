@@ -23,7 +23,7 @@ struct AgentEventsWindowRowIdentityTests {
 
     @Test
     func `renders separate rows for two runs that restart seq`() async throws {
-        _ = AppKitTestSupport.application
+        try await AppKitTestSupport.startApplication()
         let store = AgentEventStore.shared
         store.clear()
         defer { store.clear() }

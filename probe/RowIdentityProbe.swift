@@ -128,26 +128,29 @@ struct RowIdentityProbe {
         let mode = ProcessInfo.processInfo.environment["PROBE_MODE"] ?? "unknown"
         print("PROBE mode=\(mode) outputDir=\(outputDir)")
 
-        NSApplication.shared.setActivationPolicy(.accessory)
+        try await AppKitTestSupport.startApplication()
         let store = AgentEventStore.shared
         store.clear()
 
         print("FOR_EACH_DUMP_BEGIN")
-        for line in Self.forEachIdentity(AgentEventsWindow()) { print(line) }
+        let window = AgentEventsWindow()
+        let body: some View = window.body
+        print("BODY_TYPE \(String(describing: type(of: body)))")
+        for line in Self.forEachIdentity(body) { print(line) }
         print("FOR_EACH_DUMP_END")
 
         // Stage 1: one run in the buffer.
         store.append(Self.event(runId: "run-a", seq: 1, stream: "alpha"))
         let host = NSHostingView(rootView: AgentEventsWindow())
         host.frame = NSRect(x: 0, y: 0, width: 760, height: 420)
-        let window = NSWindow(
+        let appWindow = NSWindow(
             contentRect: host.frame,
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false)
-        window.title = "Agent Events"
-        window.contentView = host
-        window.orderFront(nil)
+        appWindow.title = "Agent Events"
+        appWindow.contentView = host
+        appWindow.orderFront(nil)
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(400))
         let stageOne = Self.writePNG(host, to: "\(outputDir)/\(mode)-stage1.png")
