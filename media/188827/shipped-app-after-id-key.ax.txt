@@ -1,0 +1,78 @@
+WINDOW=Agent Events
+ELEMENTS=50
+AXGroup :: missing value
+AXStaticText :: Agent Events
+AXButton :: missing value
+AXScrollArea :: missing value
+AXOpaqueProviderGroup :: missing value
+AXStaticText :: LIFECYCLE
+AXStaticText :: run 4eafb005-9d57-4337-a5a7-a1b871315354
+AXStaticText :: 17:06:41.778
+AXStaticText :: LIFECYCLE
+AXStaticText :: run 4eafb005-9d57-4337-a5a7-a1b871315354
+AXStaticText :: 17:06:41.769
+AXStaticText :: {
+  "provider" : null,
+  "phase" : "model",
+  "model" : null
+}
+AXStaticText :: LIFECYCLE
+AXStaticText :: run 4eafb005-9d57-4337-a5a7-a1b871315354
+AXStaticText :: 17:06:41.757
+AXStaticText :: {
+  "aborted" : false,
+  "stopReason" : "stop",
+  "phase" : "finishing",
+  "endedAt" : 1793466401757,
+  "livenessState" : "working"
+}
+AXStaticText :: USAGE
+AXStaticText :: run 4eafb005-9d57-4337-a5a7-a1b871315354
+AXStaticText :: 17:06:41.749
+AXStaticText :: ASSISTANT
+AXStaticText :: run 4eafb005-9d57-4337-a5a7-a1b871315354
+AXStaticText :: 17:06:41.748
+AXStaticText :: {
+  "delta" : "stub reply",
+  "itemId" : "9550625d-4806-43fe-ba22-79b140a57f44:1",
+  "text" : "stub reply"
+}
+AXStaticText :: LIFECYCLE
+AXStaticText :: run 4eafb005-9d57-4337-a5a7-a1b871315354
+AXStaticText :: 17:06:41.746
+AXStaticText :: {
+  "provider" : "stub",
+  "model" : "stub-1",
+  "phase" : "model"
+}
+AXStaticText :: LIFECYCLE
+AXStaticText :: run 4eafb005-9d57-4337-a5a7-a1b871315354
+AXStaticText :: 17:06:41.694
+AXStaticText :: {
+  "phase" : "start",
+  "startedAt" : 1793466401694
+}
+AXStaticText :: LIFECYCLE
+AXStaticText :: run cf60889a-fbb3-4651-8244-b6f5d2acee6a
+AXStaticText :: 17:06:35.899
+AXStaticText :: LIFECYCLE
+AXStaticText :: run cf60889a-fbb3-4651-8244-b6f5d2acee6a
+AXStaticText :: 17:06:35.877
+AXStaticText :: {
+  "model" : null,
+  "provider" : null,
+  "phase" : "model"
+}
+AXScrollBar :: 0.0
+AXValueIndicator :: 0.0
+AXButton :: missing value
+AXButton :: missing value
+AXButton :: missing value
+AXButton :: missing value
+AXButton :: missing value
+AXButton :: missing value
+AXGroup :: missing value
+AXGroup :: missing value
+AXButton :: missing value
+AXStaticText :: Agent Events
+
