@@ -27,7 +27,9 @@ on run argv
 		if (count of matches) = 0 then return "NO_OPENCLAW_PROCESS"
 		set p to item 1 of matches
 		tell p
-			set frontmost to true
+			try
+				set frontmost to true
+			end try
 			delay 0.8
 			-- Close any menu left open by an earlier stage.
 			try
@@ -83,6 +85,13 @@ on run argv
 			click sessionItem
 			delay 1.5
 			set sessionMenu to menu 1 of sessionItem
+			if ((name of every menu item of sessionMenu) as string) is "" then
+				try
+					perform action "AXShowMenu" of sessionItem
+				end try
+				delay 1.5
+				set sessionMenu to menu 1 of sessionItem
+			end if
 			set out to out & "SESSION_ITEMS=" & ((name of every menu item of sessionMenu) as string) & linefeed
 
 			set targetIndex to 0
@@ -94,6 +103,13 @@ on run argv
 			click (menu item targetIndex of sessionMenu)
 			delay 1.5
 			set targetMenu to menu 1 of (menu item targetIndex of sessionMenu)
+			if ((name of every menu item of targetMenu) as string) is "" then
+				try
+					perform action "AXShowMenu" of (menu item targetIndex of sessionMenu)
+				end try
+				delay 1.5
+				set targetMenu to menu 1 of (menu item targetIndex of sessionMenu)
+			end if
 			set out to out & "OPEN_MENU=" & targetTitle & linefeed
 			repeat with k from 1 to (count of menu items of targetMenu)
 				set mi to menu item k of targetMenu
