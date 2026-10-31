@@ -1,0 +1,41 @@
+name: Probe macOS app automation capability
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: System info
+        run: |
+          sw_vers
+          Swift --version || swift --version
+
+      - name: AX trust + screen probe
+        run: |
+          cat > /tmp/axprobe.swift <<'SWIFT'
+          import AppKit
+          import ApplicationServices
+          import CoreGraphics
+          print("trusted=\(AXIsProcessTrusted())")
+          print("trustedWithOptions=\(AXIsProcessTrustedWithOptions(nil))")
+          print("screens=\(NSScreen.screens.count)")
+          if let d = NSScreen.screens.first { print("screenFrame=\(d.frame)") }
+          let info = CGWindowListCopyWindowInfo([.optionOnScreen, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+          print("onscreenWindows=\(info.count)")
+          for w in info.prefix(5) {
+            print("win owner=\(w[kCGWindowOwnerName as String] ?? "?") id=\(w[kCGWindowNumber as String] ?? "?")")
+          }
+          SWIFT
+          swift /tmp/axprobe.swift 2>&1 | tail -20
+
+      - name: Capture and UI scripting probe
+        run: |
+          screencapture -x /tmp/full.png; echo "screencapture_exit=$?"
+          file /tmp/full.png 2>/dev/null; ls -l /tmp/full.png 2>/dev/null
+          open -a TextEdit; sleep 6
+          osascript -e 'tell application "System Events" to get name of every window of process "TextEdit"' ; echo "osascript_windows_exit=$?"
+          osascript -e 'tell application "System Events" to click menu bar item 1 of menu bar 1 of process "TextEdit"'; echo "osascript_click_exit=$?"
+          osascript -e 'tell application "TextEdit" to get name of front window'; echo "osascript_app_exit=$?"
