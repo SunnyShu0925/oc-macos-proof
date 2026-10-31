@@ -1,0 +1,394 @@
+name: Shipped app Agent Events run (PR 188827)
+
+# Full proof: build dist/OpenClaw.app from the PR branch, run a local Gateway,
+# drive two real agent turns, open Debug -> Open Agent Events through the status
+# menu with System Events, and capture the real window.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: PR branch on SunnyShu0925/openclaw
+        required: true
+        default: fix/agent-events-window-id-187608
+      mode:
+        description: "head (fixed) or base (id: .seq reverted)"
+        required: true
+        default: head
+
+jobs:
+  proof:
+    runs-on: macos-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ inputs.pr_branch }}
+          path: openclaw
+          fetch-depth: 1
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          swift --version
+          xcodebuild -version
+          node --version || true
+
+      - name: Setup pnpm
+        run: corepack enable
+
+      - name: Install dependencies
+        working-directory: openclaw
+        timeout-minutes: 25
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare apple mermaid assets
+        working-directory: openclaw
+        run: node scripts/prepare-apple-mermaid.mjs
+
+      - name: Build CLI dist
+        working-directory: openclaw
+        timeout-minutes: 25
+        run: |
+          set -euo pipefail
+          pnpm build 2>&1 | tail -25
+          ls -la dist/entry.mjs
+
+      - name: Apply mode
+        working-directory: openclaw
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          SRC=apps/macos/Sources/OpenClaw/AgentEventsWindow.swift
+          if [ "$MODE" = "base" ]; then
+            python3 - "$SRC" <<'PY'
+          import sys, pathlib
+          p = pathlib.Path(sys.argv[1])
+          s = p.read_text()
+          if "id: \\.id" not in s:
+              raise SystemExit("expected id: \\.id in " + str(p))
+          p.write_text(s.replace("id: \\.id", "id: \\.seq"))
+          print("BASE mode: reverted to id: \\.seq")
+          PY
+          fi
+          grep -n "ForEach" "$SRC" | head -3
+
+      - name: Build app product (SwiftPM)
+        working-directory: openclaw
+        timeout-minutes: 70
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          swift build --package-path apps/macos --build-system native --product OpenClaw 2>&1 | tee /tmp/build.log | tail -40
+          ls -la apps/macos/.build/debug/OpenClaw
+
+      - name: Assemble unsigned app bundle
+        working-directory: openclaw
+        run: |
+          set -euo pipefail
+          APP="$PWD/dist/OpenClaw.app"
+          rm -rf "$APP"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
+          cp apps/macos/.build/debug/OpenClaw "$APP/Contents/MacOS/OpenClaw"
+          chmod 0755 "$APP/Contents/MacOS/OpenClaw"
+          if [ -d apps/macos/.build/debug/Sparkle.framework ]; then
+            cp -R apps/macos/.build/debug/Sparkle.framework "$APP/Contents/MacOS/"
+            cp -R apps/macos/.build/debug/Sparkle.framework "$APP/Contents/Frameworks/"
+          fi
+          for b in apps/macos/.build/debug/*.bundle; do
+            [ -d "$b" ] && cp -R "$b" "$APP/Contents/Resources/" || true
+          done
+          python3 - "$PWD" "$APP/Contents/Info.plist" <<'PY'
+          import plistlib, sys, pathlib, subprocess
+          root, out = sys.argv[1], sys.argv[2]
+          src = pathlib.Path(root, "apps/macos/Sources/OpenClaw/Resources/Info.plist")
+          with open(src, "rb") as f:
+              info = plistlib.load(f)
+          commit = subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"], text=True).strip()
+          info.update({
+              "CFBundleExecutable": "OpenClaw",
+              "OpenClawGitCommit": commit,
+          })
+          with open(out, "wb") as f:
+              plistlib.dump(info, f)
+          print("Info.plist written for", info.get("CFBundleIdentifier"))
+          PY
+          codesign --force --deep --sign - "$APP" 2>&1 | tail -5 || true
+          codesign -dv "$APP" 2>&1 | head -4 || true
+          ls -la "$APP/Contents/MacOS"
+
+      - name: Write config + stub model + start Gateway
+        working-directory: openclaw
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.openclaw"
+          cat > "$HOME/.openclaw/openclaw.json" <<'JSON'
+          {
+            "gateway": { "mode": "local", "port": 18789, "auth": { "mode": "none" } },
+            "models": {
+              "providers": {
+                "stub": {
+                  "baseUrl": "http://127.0.0.1:18999/v1",
+                  "api": "openai-completions",
+                  "apiKey": "stub-key",
+                  "models": [
+                    {
+                      "id": "stub-1",
+                      "name": "Stub 1",
+                      "compat": {
+                        "supportsTools": false,
+                        "requiresStringContent": true,
+                        "strictMessageKeys": true
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "agents": { "defaults": { "model": { "primary": "stub/stub-1" } } }
+          }
+          JSON
+          cat > /tmp/stub-model.mjs <<'JS'
+          import http from "node:http";
+          const port = Number(process.env.STUB_PORT || 18999);
+          const server = http.createServer((req, res) => {
+            let body = "";
+            req.on("data", (c) => { body += c; });
+            req.on("end", () => {
+              if (req.url.startsWith("/v1/models")) {
+                res.writeHead(200, { "content-type": "application/json" });
+                res.end(JSON.stringify({ object: "list", data: [{ id: "stub-1", object: "model" }] }));
+                return;
+              }
+              if (!req.url.includes("/chat/completions")) {
+                res.writeHead(404); res.end("not found"); return;
+              }
+              let parsed = {};
+              try { parsed = JSON.parse(body || "{}"); } catch {}
+              const id = "chatcmpl-stub-" + Date.now();
+              const created = Math.floor(Date.now() / 1000);
+              const model = parsed.model || "stub-1";
+              if (parsed.stream === false) {
+                res.writeHead(200, { "content-type": "application/json" });
+                res.end(JSON.stringify({
+                  id, object: "chat.completion", created, model,
+                  choices: [{ index: 0, message: { role: "assistant", content: "stub reply" }, finish_reason: "stop" }],
+                  usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 }
+                }));
+                return;
+              }
+              res.writeHead(200, {
+                "content-type": "text/event-stream",
+                "cache-control": "no-cache",
+                connection: "keep-alive"
+              });
+              const chunk = (delta, finish = null) => "data: " + JSON.stringify({
+                id, object: "chat.completion.chunk", created, model,
+                choices: [{ index: 0, delta, finish_reason: finish }]
+              }) + "\n\n";
+              res.write(chunk({ role: "assistant", content: "" }));
+              res.write(chunk({ content: "stub reply" }));
+              res.write(chunk({}, "stop"));
+              res.write("data: [DONE]\n\n");
+              res.end();
+            });
+          });
+          server.listen(port, "127.0.0.1", () => console.log("stub model listening on " + port));
+          JS
+          nohup node /tmp/stub-model.mjs > /tmp/stub.log 2>&1 &
+          nohup node openclaw.mjs gateway run > /tmp/gateway.log 2>&1 &
+          for i in $(seq 1 60); do
+            if node openclaw.mjs gateway status > /tmp/gateway-status.txt 2>&1; then
+              echo "gateway up after $((i*5))s"; break
+            fi
+            sleep 10
+          done
+          echo "--- stub ---"; tail -5 /tmp/stub.log || true
+          echo "--- gateway ---"; tail -30 /tmp/gateway.log || true
+          node openclaw.mjs gateway status || true
+          node openclaw.mjs models list 2>&1 | head -20 || true
+
+      - name: Launch app (debug menu helper)
+        working-directory: openclaw
+        run: |
+          set -euo pipefail
+          ./dist/OpenClaw.app/Contents/MacOS/OpenClaw --attach-only --no-activate --background-only --debug-open-menu \
+            > /tmp/app.log 2>&1 &
+          sleep 12
+          pgrep -fl "OpenClaw.app/Contents/MacOS/OpenClaw" || echo "APP_NOT_RUNNING"
+          tail -40 /tmp/app.log || true
+
+      - name: Open Debug -> Open Agent Events (status menu)
+        continue-on-error: true
+        run: |
+          cat > /tmp/menuclick.applescript <<'AS'
+          on run
+            tell application "System Events"
+              tell process "OpenClaw"
+                set out to ""
+                repeat with attempt from 1 to 10
+                  try
+                    set m to menu 1 of menu bar item 1 of menu bar 2
+                    set out to out & "MENU[" & attempt & "]=" & (name of every menu item of m as string) & linefeed
+                    repeat with itm in (menu items of m)
+                      if (name of itm as string) is "Debug" then
+                        click itm
+                        delay 1
+                        set sub to menu 1 of menu item "Debug" of m
+                        set out to out & "SUB=" & (name of every menu item of sub as string) & linefeed
+                        repeat with si in (menu items of sub)
+                          if (name of si as string) starts with "Open Agent Events" then
+                            click si
+                            return out & "CLICKED_OPEN_AGENT_EVENTS"
+                          end if
+                        end repeat
+                        return out & "NO_EVENTS_ITEM"
+                      end if
+                    end repeat
+                    set out to out & "NO_DEBUG_ITEM" & linefeed
+                  on error errMsg
+                    set out to out & "ERR[" & attempt & "]=" & errMsg & linefeed
+                  end try
+                  delay 1
+                end repeat
+                return out
+              end tell
+            end tell
+          end run
+          AS
+          osascript /tmp/menuclick.applescript 2>&1 | tee /tmp/menu.log || true
+          if ! grep -q CLICKED_OPEN_AGENT_EVENTS /tmp/menu.log; then
+            echo "--- fallback: real right-click on the status item ---"
+            POS=$(osascript -e 'tell application "System Events" to tell process "OpenClaw" to get {position, size} of menu bar item 1 of menu bar 2' 2>&1)
+            echo "status item geometry=$POS"
+            cat > /tmp/rightclick.swift <<'SWIFT'
+          import CoreGraphics
+          let parts = CommandLine.arguments.dropFirst().first!.split(separator: " ")
+          let x = Double(parts[0])!, y = Double(parts[1])!
+          let pt = CGPoint(x: x, y: y)
+          let src = CGEventSource(stateID: .hidSystemState)
+          CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: pt, mouseButton: .right)!.post(tap: .cghidEventTap)
+          usleep(200000)
+          CGEvent(mouseEventSource: src, mouseType: .rightMouseDown, mouseCursorPosition: pt, mouseButton: .right)!.post(tap: .cghidEventTap)
+          usleep(120000)
+          CGEvent(mouseEventSource: src, mouseType: .rightMouseUp, mouseCursorPosition: pt, mouseButton: .right)!.post(tap: .cghidEventTap)
+          SWIFT
+            CENTER=$(python3 - "$POS" <<'PY'
+          import re, sys
+          s = sys.argv[1]
+          nums = [int(n) for n in re.findall(r"-?\d+", s)]
+          if len(nums) >= 4:
+              print(nums[0] + nums[2] // 2, nums[1] + nums[3] // 2)
+          PY
+          )
+            echo "click point=$CENTER"
+            if [ -n "$CENTER" ]; then
+              swift /tmp/rightclick.swift "$CENTER" 2>&1 | tail -5
+              sleep 2
+              osascript /tmp/menuclick.applescript 2>&1 | tee -a /tmp/menu.log || true
+            fi
+          fi
+          sleep 2
+          screencapture -x /tmp/full-screen.png || true
+          file /tmp/full-screen.png || true
+
+      - name: Agent turn A
+        working-directory: openclaw
+        continue-on-error: true
+        run: |
+          node openclaw.mjs agent --session-id events-a --message "Reply with the single word: alpha" --json \
+            > /tmp/turn-a.json 2>/tmp/turn-a.err || true
+          head -30 /tmp/turn-a.json || true
+          tail -10 /tmp/turn-a.err || true
+          sleep 3
+
+      - name: Agent turn B (window already open, same seq numbers)
+        working-directory: openclaw
+        continue-on-error: true
+        run: |
+          node openclaw.mjs agent --session-id events-b --message "Reply with the single word: beta" --json \
+            > /tmp/turn-b.json 2>/tmp/turn-b.err || true
+          head -30 /tmp/turn-b.json || true
+          tail -10 /tmp/turn-b.err || true
+          sleep 5
+
+      - name: Gateway + pairing diagnostics
+        continue-on-error: true
+        working-directory: openclaw
+        run: |
+          node openclaw.mjs devices list --json > /tmp/devices.json 2>&1 || true
+          head -c 1200 /tmp/devices.json || true
+          node openclaw.mjs gateway status > /tmp/gateway-status.txt 2>&1 || true
+          cat /tmp/gateway-status.txt || true
+          echo "--- gateway log ---"; tail -40 /tmp/gateway.log || true
+          echo "--- app log ---"; tail -40 /tmp/app.log || true
+
+      - name: Capture window + rows
+        run: |
+          set +e
+          cat > /tmp/windowid.swift <<'SWIFT'
+          import CoreGraphics
+          let list = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+          for w in list {
+            let owner = w[kCGWindowOwnerName as String] as? String ?? ""
+            if owner.contains("OpenClaw") {
+              let b = w[kCGWindowBounds as String] as? [String: Any] ?? [:]
+              print("WINDOW owner=\(owner) name=\(w[kCGWindowName as String] ?? "") id=\(w[kCGWindowNumber as String] ?? -1) bounds=\(b["X"] ?? 0),\(b["Y"] ?? 0),\(b["Width"] ?? 0),\(b["Height"] ?? 0)")
+            }
+          }
+          SWIFT
+          swift /tmp/windowid.swift 2>&1 | tee /tmp/windows.txt
+          LINE=$(grep "name=Agent Events" /tmp/windows.txt | head -1)
+          WID=$(echo "$LINE" | sed -n 's/.* id=\([0-9-]*\).*/\1/p')
+          RECT=$(echo "$LINE" | sed -n 's/.* bounds=\([-0-9.,]*\).*/\1/p')
+          echo "WID=$WID RECT=$RECT"
+          if [ -n "$WID" ]; then screencapture -x -o -l "$WID" /tmp/agent-events-window.png || true; fi
+          file /tmp/agent-events-window.png 2>/dev/null || true
+          if [ ! -s /tmp/agent-events-window.png ] && [ -n "$RECT" ]; then
+            echo "window capture missing; trying region capture"
+            screencapture -x -R"$RECT" /tmp/agent-events-window.png || true
+            file /tmp/agent-events-window.png 2>/dev/null || true
+          fi
+          osascript <<'AS' 2>&1 | tee /tmp/rows.txt || true
+          tell application "System Events"
+            tell process "OpenClaw"
+              if exists window "Agent Events" then
+                set out to ""
+                repeat with e in (entire contents of window "Agent Events")
+                  try
+                    if role of e is "AXStaticText" then set out to out & (value of e as text) & linefeed
+                  end try
+                end repeat
+                return out
+              else
+                return "NO_WINDOW"
+              end if
+            end tell
+          end tell
+          AS
+          echo "--- rows ---"; cat /tmp/rows.txt || true
+
+      - name: Collect
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shipped-app-events-run-${{ inputs.mode }}
+          path: |
+            /tmp/agent-events-window.png
+            /tmp/rows.txt
+            /tmp/windows.txt
+            /tmp/app.log
+            /tmp/gateway.log
+            /tmp/stub.log
+            /tmp/turn-a.json
+            /tmp/turn-a.err
+            /tmp/turn-b.json
+            /tmp/turn-b.err
+            /tmp/devices.json
+            /tmp/menu.log
+            /tmp/menu2.log
+            /tmp/full-screen.png
+            /tmp/gateway-status.txt
