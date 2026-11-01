@@ -35,6 +35,10 @@ capture() {
 }
 
 drill Thinking 0 /tmp/ax-thinking-fresh.txt
+if grep -q "MENU_NOT_OPEN" /tmp/ax-thinking-fresh.txt; then
+  osascript -e 'tell application "System Events" to tell (first process whose name contains "OpenClaw") to get {name, count of menu bars, count of menu bar items of menu bar 2, entire contents of menu bar 2}' > /tmp/ax-diagnostic.txt 2>&1 || true
+  head -c 4000 /tmp/ax-diagnostic.txt || true
+fi
 sleep 1
 capture thinking-fresh
 
