@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 
 let ownerFilter = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "OpenClaw"
+let minLayer = CommandLine.arguments.count > 2 ? (Int(CommandLine.arguments[2]) ?? 100) : 100
 let list = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID)
     as? [[String: Any]] ?? []
 var found = 0
@@ -9,7 +10,7 @@ for w in list {
     let owner = w[kCGWindowOwnerName as String] as? String ?? ""
     guard owner.contains(ownerFilter) else { continue }
     let layer = w[kCGWindowLayer as String] as? Int ?? -1
-    guard layer >= 100 else { continue }
+    guard layer >= minLayer else { continue }
     let bounds = w[kCGWindowBounds as String] as? [String: Any] ?? [:]
     let id = w[kCGWindowNumber as String] as? Int ?? -1
     let x = bounds["X"] ?? 0
