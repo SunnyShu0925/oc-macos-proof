@@ -1,0 +1,66 @@
+name: click-probe
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and launch click probe
+        run: |
+          set -euo pipefail
+          APP=/tmp/ClickProbe.app
+          rm -rf "$APP"
+          mkdir -p "$APP/Contents/MacOS"
+          cp probe/click-app/Info.plist "$APP/Contents/Info.plist"
+          swiftc -O probe/click-app/main.swift -o "$APP/Contents/MacOS/MenuProbe"
+          rm -f /tmp/click.log
+          open "$APP"
+          sleep 3
+          pgrep -fl MenuProbe || true
+          cat /tmp/click.log || true
+
+      - name: Try left, control-left, right click
+        run: |
+          set +e
+          P="$PWD/probe"
+          POS=$(osascript -e 'tell application "System Events" to tell (first process whose name is "MenuProbe") to get position of menu bar item 1 of menu bar 2')
+          SIZE=$(osascript -e 'tell application "System Events" to tell (first process whose name is "MenuProbe") to get size of menu bar item 1 of menu bar 2')
+          echo "POS=$POS SIZE=$SIZE"
+          X=$(python3 -c "import sys; p=[float(v) for v in sys.argv[1].replace(' ','').split(',')]; s=[float(v) for v in sys.argv[2].replace(' ','').split(',')]; print(int(p[0]+s[0]/2)); print(int(p[1]+s[1]/2))" "$POS" "$SIZE" | sed -n 1p)
+          Y=$(python3 -c "import sys; p=[float(v) for v in sys.argv[1].replace(' ','').split(',')]; s=[float(v) for v in sys.argv[2].replace(' ','').split(',')]; print(int(p[1]+s[1]/2))" "$POS" "$SIZE")
+          echo "CLICK_POINT=$X,$Y"
+
+          echo "=== A: plain left click"
+          osascript -e "tell application \"System Events\" to click at {$X, $Y}"
+          sleep 2
+          tail -6 /tmp/click.log || true
+          swift "$P/menu-windows.swift" MenuProbe || true
+          osascript -e 'tell application "System Events" to key code 53' || true
+          sleep 1
+
+          echo "=== B: control + left click"
+          osascript -e 'tell application "System Events" to key down control' || true
+          osascript -e "tell application \"System Events\" to click at {$X, $Y}" || true
+          osascript -e 'tell application "System Events" to key up control' || true
+          sleep 2
+          tail -6 /tmp/click.log || true
+          swift "$P/menu-windows.swift" MenuProbe || true
+          osascript -e 'tell application "System Events" to key code 53' || true
+          sleep 1
+
+          echo "=== C: CGEvent right click"
+          swift "$P/right-click.swift" "$X" "$Y" || true
+          sleep 2
+          tail -6 /tmp/click.log || true
+          swift "$P/menu-windows.swift" MenuProbe || true
+          osascript -e 'tell application "System Events" to key code 53' || true
+          sleep 1
+
+          echo "=== final windows"
+          swift "$P/menu-windows.swift" MenuProbe || true
+          echo "=== final log"
+          cat /tmp/click.log || true
