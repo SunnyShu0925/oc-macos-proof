@@ -16,6 +16,10 @@ on:
         description: head or base
         required: true
         default: head
+      app_rev:
+        description: cache key for the packaged app (PR head sha)
+        required: false
+        default: local
 
 jobs:
   proof:
@@ -47,6 +51,24 @@ jobs:
           corepack enable
           node --version || true
 
+      - name: Restore build cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            openclaw/node_modules
+            openclaw/dist
+          key: menu-${{ inputs.mode }}-${{ inputs.app_rev }}
+
+      - name: Detect prebuilt app
+        id: app
+        working-directory: openclaw
+        run: |
+          if [ -x "$APP_EXEC" ]; then
+            echo "built=true" >> "$GITHUB_OUTPUT"
+            echo "reusing cached app bundle"
+          fi
+
       - name: Install dependencies
         working-directory: openclaw
         timeout-minutes: 25
@@ -69,11 +91,13 @@ jobs:
           grep -n "let selected" "$SRC"
 
       - name: Build plugin assets
+        if: steps.app.outputs.built != 'true'
         working-directory: openclaw
         timeout-minutes: 20
         run: pnpm plugins:assets:build
 
       - name: Package app (ad-hoc)
+        if: steps.app.outputs.built != 'true'
         working-directory: openclaw
         timeout-minutes: 70
         env:
@@ -133,6 +157,10 @@ jobs:
           done < /tmp/pending.txt
           sleep 10
           pnpm openclaw devices list --json 2>&1 | tail -c 800 || true
+          open "$PWD/dist/OpenClaw.app" || true
+          sleep 3
+          osascript -e 'tell application id "ai.openclaw.mac.debug" to activate' || true
+          sleep 2
 
       - name: Create a session that inherits the agent defaults
         working-directory: openclaw

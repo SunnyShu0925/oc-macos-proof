@@ -8,6 +8,15 @@
 -- Returns the dump text. The menu is left open (unless Off was clicked) so the
 -- shell can capture the popup window that is on screen.
 
+on menuItemCount(si)
+	set n to 0
+	try
+		set m to menu 1 of si
+		set n to (count of menu items of m)
+	end try
+	return n
+end menuItemCount
+
 on run argv
 	set targetTitle to item 1 of argv
 	set clickOff to false
@@ -19,6 +28,7 @@ on run argv
 	try
 		set appPid to (system attribute "APP_PID") as integer
 	end try
+
 	set out to ""
 	tell application "System Events"
 		set matches to {}
@@ -38,23 +48,45 @@ on run argv
 			delay 1
 			set out to out & "MENUBARS=" & (count of menu bars as string) & linefeed
 			if (count of menu bars) < 2 then return out & "NO_MENUBAR2"
+			set out to out & "STATUS_ITEMS=" & (count of menu bar items of menu bar 2 as string) & linefeed
 			set si to menu bar item 1 of menu bar 2
+			try
+				set out to out & "STATUS_ITEM_DESC=" & (description of si as string) & linefeed
+				set out to out & "STATUS_ITEM_POS=" & (position of si as string) & linefeed
+			end try
 
 			-- The menu is a popup: its items only exist while it is on screen.
-			set rootNames to ""
-			repeat with attempt from 1 to 10
-				try
-					set m to menu 1 of si
-					set rootNames to (name of every menu item of m) as string
-				end try
-				if rootNames is not "" then exit repeat
+			-- AXPress on a status item is unreliable, so fall back to a real
+			-- click at the item's centre.
+			set count0 to my menuItemCount(si)
+			set openMode to "already-open count=" & (count0 as string)
+			repeat with attempt from 1 to 12
+				set count0 to my menuItemCount(si)
+				if count0 > 0 then exit repeat
 				try
 					click si
 				end try
-				delay 2
+				delay 1.5
+				set count0 to my menuItemCount(si)
+				if count0 > 0 then
+					set openMode to "axpress"
+					exit repeat
+				end if
+				try
+					set {sx, sy} to position of si
+					set {sw, sh} to size of si
+					click at {sx + (sw / 2), sy + (sh / 2)}
+					set openMode to "click-at"
+				end try
+				delay 2.5
+				set count0 to my menuItemCount(si)
+				if count0 > 0 then exit repeat
 			end repeat
-			if rootNames is "" then return out & "MENU_NOT_OPEN" & linefeed
-			set out to out & "ROOT_ITEMS=" & rootNames & linefeed
+			if count0 = 0 then return out & "MENU_NOT_OPEN" & linefeed
+			set out to out & "MENU_OPEN_USING=" & openMode & " items=" & (count0 as string) & linefeed
+
+			set m to menu 1 of si
+			set out to out & "ROOT_ITEMS=" & ((name of every menu item of m) as string) & linefeed
 
 			-- A session row is the item whose submenu owns the Thinking item.
 			-- Session rows arrive after the gateway answers, so poll.
@@ -62,7 +94,6 @@ on run argv
 			set sessionNames to ""
 			repeat with attempt from 1 to 12
 				set m to menu 1 of si
-				set rootNames to (name of every menu item of m) as string
 				repeat with i from 1 to (count of menu items of m)
 					try
 						set candidate to menu 1 of (menu item i of m)
@@ -77,10 +108,10 @@ on run argv
 				if sessionIndex > 0 then exit repeat
 				delay 2
 			end repeat
-			if sessionIndex = 0 then return out & "NO_SESSION_ITEM" & linefeed
+			if sessionIndex = 0 then return out & "NO_SESSION_ITEM items=" & (count of menu items of m as string) & linefeed
 
 			set sessionItem to menu item sessionIndex of m
-			set out to out & "ROOT_ITEMS_AT_CLICK=" & rootNames & linefeed
+			set out to out & "ROOT_ITEMS_AT_CLICK=" & ((name of every menu item of m) as string) & linefeed
 			set out to out & "SESSION_ROW=" & sessionIndex & " items=" & sessionNames & linefeed
 			click sessionItem
 			delay 1.5
