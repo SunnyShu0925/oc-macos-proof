@@ -171,6 +171,14 @@ jobs:
           sleep 6
           pnpm openclaw sessions list --json 2>&1 | tail -c 1500 || true
 
+      - name: Inspect packaged binary for the debug menu hooks
+        working-directory: openclaw
+        run: |
+          set +e
+          strings "$APP_EXEC" | grep -c -- "--debug-open-menu" || echo "debug_open_menu_strings=0"
+          strings "$APP_EXEC" | grep -c -- "--debug-probe-rightclick" || echo "debug_rightclick_strings=0"
+          strings "$APP_EXEC" | grep -c "OPENCLAW_DEBUG_OPEN_MENU" || echo "debug_env_strings=0"
+
       - name: Menu - drill Thinking/Verbose and capture popups
         working-directory: openclaw
         continue-on-error: true
