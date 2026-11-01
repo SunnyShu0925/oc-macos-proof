@@ -239,6 +239,8 @@ jobs:
             /tmp/ax-thinking-off.txt
             /tmp/ax-verbose-fresh.txt
             /tmp/popups-*.txt
+            /tmp/openclaw-proof-diagnostics.txt
+            /tmp/openclaw-proof-menu-state.txt
             /tmp/ocr-*.txt
             /tmp/menu-proof.log
             /tmp/turn.json

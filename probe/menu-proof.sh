@@ -68,14 +68,21 @@ warm_up() {
     request root
     probe_root || true
     close_menu
-    if ! grep -q "No recent sessions" /tmp/ocr-probe.txt 2>/dev/null; then
-      echo "SESSIONS_READY try=$i"
-      return 0
+    request diagnose
+    sleep 3
+    local rows
+    rows=$(sed -n 's/^ROWS //p' /tmp/openclaw-proof-diagnostics.txt 2>/dev/null | head -1)
+    echo "SESSIONS_PENDING try=$i rows=${rows:-unknown}"
+    if [ -n "$rows" ] && [ "$rows" -gt 0 ] 2>/dev/null; then
+      if ! grep -q "No recent sessions" /tmp/ocr-probe.txt 2>/dev/null; then
+        echo "SESSIONS_READY try=$i rows=$rows"
+        return 0
+      fi
     fi
-    echo "SESSIONS_PENDING try=$i"
-    sleep 5
+    sleep 4
   done
   echo "SESSIONS_MISSING"
+  cat /tmp/openclaw-proof-diagnostics.txt 2>/dev/null || true
   return 1
 }
 

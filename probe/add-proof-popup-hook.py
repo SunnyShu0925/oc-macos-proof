@@ -13,9 +13,11 @@ Trigger: write a command into /tmp/openclaw-proof-popup-request:
   Thinking      pop the session row's Thinking submenu
   Verbose       pop the session row's Verbose submenu
   Thinking-off  run the "Off" item of that submenu (applies the override)
+  diagnose      dump control-channel state, session rows and the store error
 
-Every command rewrites /tmp/openclaw-proof-menu-state.txt with the titles and
+Submenu commands rewrite /tmp/openclaw-proof-menu-state.txt with the titles and
 states of the submenu items, so the capture can assert what was on screen.
+`diagnose` writes /tmp/openclaw-proof-diagnostics.txt.
 
 Only this opener is harness code: the menu, the session rows and the
 Thinking/Verbose items are the shipping implementation. Idempotent; fails
@@ -38,61 +40,9 @@ ANCHOR = """            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { 
         }
 """
 
-HOOK = ANCHOR + """
-        // OPENCLAW_PROOF_POPUP_HOOK: proof harness only, not part of the fix.
-        if FileManager.default.fileExists(atPath: "/tmp/openclaw-proof-popup-enabled") {
-            func recordProofMenuState(_ menu: NSMenu) {
-                var out = ""
-                for item in menu.items {
-                    out += "ITEM name=\\(item.title) state=\\(item.state.rawValue)\\n"
-                }
-                try? out.write(toFile: "/tmp/openclaw-proof-menu-state.txt", atomically: true, encoding: .utf8)
-            }
-            func proofFindSubmenu(_ title: String) -> NSMenu? {
-                for item in self.menu.items {
-                    if let submenu = item.submenu,
-                       submenu.items.contains(where: { $0.title == title })
-                    {
-                        return submenu
-                    }
-                }
-                return nil
-            }
-            func pollProofMenu() {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                    guard let self else { return }
-                    defer { pollProofMenu() }
-                    let request = "/tmp/openclaw-proof-popup-request"
-                    guard let raw = try? String(contentsOfFile: request, encoding: .utf8) else { return }
-                    try? FileManager.default.removeItem(atPath: request)
-                    let command = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard let button = self.statusItem?.button else { return }
-                    if command == "Thinking" || command == "Verbose" {
-                        // The session rows load asynchronously; leave the menu
-                        // closed when the submenu is not built yet so the
-                        // capture can retry instead of showing the root menu.
-                        guard let submenu = proofFindSubmenu(command) else { return }
-                        self.statusItem?.menu = nil
-                        recordProofMenuState(submenu)
-                        submenu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: button)
-                        return
-                    }
-                    if command.hasSuffix("-off"),
-                       let submenu = proofFindSubmenu(String(command.dropLast(4))),
-                       let index = submenu.items.firstIndex(where: { $0.title == "Off" })
-                    {
-                        submenu.performActionForItem(at: index)
-                        recordProofMenuState(submenu)
-                        return
-                    }
-                    self.statusItem?.menu = self.menu
-                    self.menu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: button)
-                    self.statusItem?.menu = nil
-                }
-            }
-            pollProofMenu()
-        }
-"""
+body = pathlib.Path(__file__).resolve().with_name("proof-hook.swift").read_text()
+indented = "\n".join(("        " + line) if line.strip() else "" for line in body.splitlines())
+HOOK = ANCHOR + "\n" + indented + "\n"
 
 if source.count(ANCHOR) != 1:
     sys.exit("proof hook anchor matched %d times, expected 1" % source.count(ANCHOR))
