@@ -90,6 +90,10 @@ jobs:
           fi
           grep -n "let selected" "$SRC"
 
+      - name: Install proof-only menu opener
+        working-directory: openclaw
+        run: python3 "$GITHUB_WORKSPACE/proof/probe/add-proof-popup-hook.py"
+
       - name: Build plugin assets
         if: steps.app.outputs.built != 'true'
         working-directory: openclaw
@@ -184,7 +188,7 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          MENU_FLAGS="${MENU_FLAGS:---attach-only --debug-probe-rightclick}" bash "$GITHUB_WORKSPACE/proof/probe/menu-proof.sh" 2>&1 | tee /tmp/menu-proof.log
+          bash "$GITHUB_WORKSPACE/proof/probe/menu-proof.sh" 2>&1 | tee /tmp/menu-proof.log
           echo "MENU_PROOF_EXIT=$?"
 
       - name: Assert menu state from the accessibility dump

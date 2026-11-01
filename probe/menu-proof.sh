@@ -1,9 +1,11 @@
 #!/bin/bash
 # Drive the shipped app's status menu and capture the open NSMenu popups.
 #
-# The status item opens the dashboard on a left click, so every stage starts
-# the app with --debug-open-menu (a shipped debug flag that calls the same
-# presentMenu path a right click uses) and reads the menu it puts on screen.
+# The status item opens the dashboard on a left click and `performClick` does
+# not put the menu on screen in a headless runner, so the harness installs a
+# request-file opener that pops the same shipping menu (probe/add-proof-popup-
+# hook.py). Everything below the popup — the session rows, the Thinking/Verbose
+# submenus and their check marks — is the code under test.
 #
 # Usage: menu-proof.sh   (run from the openclaw checkout)
 set -u
@@ -14,17 +16,30 @@ export P OUT
 
 APP_BUNDLE="${APP_BUNDLE:-$PWD/dist/OpenClaw.app}"
 APP_EXEC="$APP_BUNDLE/Contents/MacOS/OpenClaw"
+REQUEST=/tmp/openclaw-proof-popup-request
+ENABLED=/tmp/openclaw-proof-popup-enabled
 
-relaunch() {
+start_app() {
   pkill -f "$APP_EXEC" 2>/dev/null || true
   sleep 3
-  open "$APP_BUNDLE" --args ${MENU_FLAGS:---attach-only --debug-open-menu}
+  touch "$ENABLED"
+  rm -f "$REQUEST"
+  open "$APP_BUNDLE" --args --attach-only
   sleep 12
   APP_PID=$(pgrep -f "$APP_EXEC" | head -1 || true)
   export APP_PID
-  echo "RELAUNCH app_pid=${APP_PID:-none} flags=${MENU_FLAGS:---attach-only --debug-open-menu}"
-  ps -o args= -p "${APP_PID:-0}" 2>/dev/null || true
-  swift "$P/menu-windows.swift" OpenClaw 0 2>&1 | head -12
+  echo "START app_pid=${APP_PID:-none}"
+}
+
+open_menu() {
+  rm -f "$REQUEST"
+  touch "$REQUEST"
+  sleep 3
+}
+
+close_menu() {
+  osascript -e 'tell application "System Events" to key code 53' >/dev/null 2>&1 || true
+  sleep 2
 }
 
 drill() {
@@ -54,23 +69,31 @@ capture() {
   screencapture -x "$OUT/full-$stage.png" || true
 }
 
-# 1. Session inherits agents.defaults.thinkingDefault=high: the menu must not
-#    claim "Off" when nothing is overridden.
-relaunch
+start_app
+
+# 1. Inherited Thinking (default high): the menu must not claim "Off".
+open_menu
 drill Thinking 0 /tmp/ax-thinking-fresh.txt
 capture thinking-fresh
 
-# 2. Choosing Off writes the explicit override through the shipping menu.
+# 2. Reopen the same session submenu: the update path must agree.
+close_menu
+open_menu
+drill Thinking 0 /tmp/ax-thinking-reuse.txt
+capture thinking-reuse
+
+# 3. Choosing Off writes the explicit override through the shipping menu.
 drill Thinking 1 /tmp/ax-thinking-click-off.txt
 sleep 6
 
-# 3. Restart so the reopened menu reflects the stored override.
-relaunch
+# 4. The reopened menu must show the stored override.
+open_menu
 drill Thinking 0 /tmp/ax-thinking-off.txt
 capture thinking-off
 
-# 4. Verbose inherits verboseDefault=on and must not claim "Off" either.
-relaunch
+# 5. Inherited Verbose (default on): no "Off" check either.
+close_menu
+open_menu
 drill Verbose 0 /tmp/ax-verbose-fresh.txt
 capture verbose-fresh
 

@@ -8,6 +8,7 @@ MODE = sys.argv[1] if len(sys.argv) > 1 else "head"
 LEVELS = {"Thinking": ["Off", "Minimal", "Low", "Medium", "High"], "Verbose": ["Off", "On"]}
 STAGES = [
     ("thinking-fresh", "Thinking"),
+    ("thinking-reuse", "Thinking"),
     ("thinking-off", "Thinking"),
     ("verbose-fresh", "Verbose"),
 ]
@@ -54,15 +55,17 @@ def best_shot(stage, levels):
 
 
 fresh = dump("thinking-fresh")
+reuse = dump("thinking-reuse")
 off = dump("thinking-off")
 verbose = dump("verbose-fresh")
 
-for label, text in (("fresh", fresh), ("off", off), ("verbose", verbose)):
+for label, text in (("fresh", fresh), ("reuse", reuse), ("off", off), ("verbose", verbose)):
     print("=== %s ===" % label)
     print(text.rstrip())
 
 for label, text, title in (
     ("fresh", fresh, "Thinking"),
+    ("reuse", reuse, "Thinking"),
     ("off", off, "Thinking"),
     ("verbose", verbose, "Verbose"),
 ):
@@ -70,18 +73,23 @@ for label, text, title in (
         sys.exit("FAIL: %s submenu never opened (%s)" % (title, label))
 
 fresh_checked = checked(fresh)
+reuse_checked = checked(reuse)
 off_checked = checked(off)
 verbose_checked = checked(verbose)
-print("checked fresh=%r off=%r verbose=%r" % (fresh_checked, off_checked, verbose_checked))
+print("checked fresh=%r reuse=%r off=%r verbose=%r" % (fresh_checked, reuse_checked, off_checked, verbose_checked))
 
 if MODE == "base":
     if fresh_checked != ["Off"]:
         sys.exit("FAIL: base build should check Off for inherited Thinking, saw %r" % (fresh_checked,))
+    if reuse_checked != ["Off"]:
+        sys.exit("FAIL: base build should check Off on reopen, saw %r" % (reuse_checked,))
     if verbose_checked != ["Off"]:
         sys.exit("FAIL: base build should check Off for inherited Verbose, saw %r" % (verbose_checked,))
 else:
     if fresh_checked:
         sys.exit("FAIL: head build should check nothing for inherited Thinking, saw %r" % (fresh_checked,))
+    if reuse_checked:
+        sys.exit("FAIL: reopened head menu should check nothing, saw %r" % (reuse_checked,))
     if verbose_checked:
         sys.exit("FAIL: head build should check nothing for inherited Verbose, saw %r" % (verbose_checked,))
 
