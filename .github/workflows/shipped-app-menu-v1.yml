@@ -206,10 +206,8 @@ jobs:
         if: always() && steps.built.outputs.present == 'true' && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          key: menu-${{ inputs.mode }}-${{ inputs.app_rev }}
-          path: |
-            openclaw/node_modules
-            openclaw/dist
+          key: menu-${{ inputs.mode }}-${{ inputs.app_rev }}-dist
+          path: openclaw/dist
 
       - name: Collect
         if: always()
