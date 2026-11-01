@@ -69,6 +69,17 @@ jobs:
             echo "reusing cached app bundle"
           fi
 
+      - name: Rebuild workspace package dist for a cached tree
+        if: steps.app.outputs.built == 'true'
+        working-directory: openclaw
+        timeout-minutes: 25
+        run: |
+          if [ -f packages/ai/dist/diagnostics.mjs ]; then
+            echo "workspace dist already present"
+          else
+            pnpm -r --filter "./packages/*" --if-present run build
+          fi
+
       - name: Install dependencies
         working-directory: openclaw
         timeout-minutes: 25
@@ -130,8 +141,9 @@ jobs:
             if nc -z 127.0.0.1 18789 2>/dev/null; then echo "gateway port open after $((i*5))s"; break; fi
             sleep 5
           done
-          nc -z 127.0.0.1 18789 && echo "PORT_OPEN" || echo "PORT_CLOSED"
           tail -20 /tmp/gateway.log || true
+          nc -z 127.0.0.1 18789 || { echo "PORT_CLOSED"; exit 1; }
+          echo "PORT_OPEN"
 
       - name: Launch packaged app + approve device
         working-directory: openclaw
