@@ -184,6 +184,9 @@ jobs:
           head -c 600 /tmp/turn.json || true
           tail -5 /tmp/turn.err || true
           sleep 6
+          pnpm openclaw agent --message "Reply with the single word: beta" --json > /tmp/turn2.json 2>/tmp/turn2.err || true
+          head -c 300 /tmp/turn2.json || true
+          sleep 6
           pnpm openclaw sessions list --json 2>&1 | tail -c 1500 || true
 
       - name: Inspect packaged binary for the debug menu hooks
@@ -240,6 +243,8 @@ jobs:
             /tmp/menu-proof.log
             /tmp/turn.json
             /tmp/turn.err
+            /tmp/turn2.json
+            /tmp/turn2.err
             /tmp/gateway.log
             /tmp/stub.log
             /tmp/doctor.log
