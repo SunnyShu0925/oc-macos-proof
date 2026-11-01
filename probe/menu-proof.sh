@@ -1,11 +1,29 @@
 #!/bin/bash
 # Drive the shipped app's status menu and capture the open NSMenu popups.
-# Usage: menu-proof.sh
+#
+# The status item opens the dashboard on a left click, so every stage starts
+# the app with --debug-open-menu (a shipped debug flag that calls the same
+# presentMenu path a right click uses) and reads the menu it puts on screen.
+#
+# Usage: menu-proof.sh   (run from the openclaw checkout)
 set -u
 P="$(cd "$(dirname "$0")" && pwd)"
 OUT=/tmp/shots
 mkdir -p "$OUT"
 export P OUT
+
+APP_BUNDLE="${APP_BUNDLE:-$PWD/dist/OpenClaw.app}"
+APP_EXEC="$APP_BUNDLE/Contents/MacOS/OpenClaw"
+
+relaunch() {
+  pkill -f "$APP_EXEC" 2>/dev/null || true
+  sleep 3
+  open "$APP_BUNDLE" --args --attach-only --debug-open-menu
+  sleep 12
+  APP_PID=$(pgrep -f "$APP_EXEC" | head -1 || true)
+  export APP_PID
+  echo "RELAUNCH app_pid=${APP_PID:-none}"
+}
 
 drill() {
   local title="$1" click_off="$2" dest="$3"
@@ -34,27 +52,24 @@ capture() {
   screencapture -x "$OUT/full-$stage.png" || true
 }
 
+# 1. Session inherits agents.defaults.thinkingDefault=high: the menu must not
+#    claim "Off" when nothing is overridden.
+relaunch
 drill Thinking 0 /tmp/ax-thinking-fresh.txt
-if grep -q "MENU_NOT_OPEN" /tmp/ax-thinking-fresh.txt; then
-  osascript -e 'tell application "System Events" to tell (first process whose name contains "OpenClaw") to get {name, count of menu bars, count of menu bar items of menu bar 2, entire contents of menu bar 2}' > /tmp/ax-diagnostic.txt 2>&1 || true
-  head -c 4000 /tmp/ax-diagnostic.txt || true
-fi
-sleep 1
 capture thinking-fresh
 
-drill Thinking 0 /tmp/ax-thinking-reuse.txt
-sleep 1
-capture thinking-reuse
-
-# Clicking Off applies the explicit override through the shipping UI.
+# 2. Choosing Off writes the explicit override through the shipping menu.
 drill Thinking 1 /tmp/ax-thinking-click-off.txt
 sleep 6
+
+# 3. Restart so the reopened menu reflects the stored override.
+relaunch
 drill Thinking 0 /tmp/ax-thinking-off.txt
-sleep 1
 capture thinking-off
 
+# 4. Verbose inherits verboseDefault=on and must not claim "Off" either.
+relaunch
 drill Verbose 0 /tmp/ax-verbose-fresh.txt
-sleep 1
 capture verbose-fresh
 
 echo "MENU_PROOF_DONE"

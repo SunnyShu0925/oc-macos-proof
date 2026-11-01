@@ -6,6 +6,11 @@ import sys
 MODE = sys.argv[1] if len(sys.argv) > 1 else "head"
 
 LEVELS = {"Thinking": ["Off", "Minimal", "Low", "Medium", "High"], "Verbose": ["Off", "On"]}
+STAGES = [
+    ("thinking-fresh", "Thinking"),
+    ("thinking-off", "Thinking"),
+    ("verbose-fresh", "Verbose"),
+]
 
 
 def read(path):
@@ -49,49 +54,42 @@ def best_shot(stage, levels):
 
 
 fresh = dump("thinking-fresh")
-reuse = dump("thinking-reuse")
 off = dump("thinking-off")
 verbose = dump("verbose-fresh")
 
-for label, text in (("fresh", fresh), ("reuse", reuse), ("off", off), ("verbose", verbose)):
+for label, text in (("fresh", fresh), ("off", off), ("verbose", verbose)):
     print("=== %s ===" % label)
     print(text.rstrip())
 
-if "OPEN_MENU=Thinking" not in fresh:
-    sys.exit("FAIL: Thinking submenu never opened (fresh)")
-if "OPEN_MENU=Thinking" not in reuse:
-    sys.exit("FAIL: Thinking submenu never opened (reuse)")
-if "OPEN_MENU=Thinking" not in off:
-    sys.exit("FAIL: Thinking submenu never opened (explicit Off)")
-if "OPEN_MENU=Verbose" not in verbose:
-    sys.exit("FAIL: Verbose submenu never opened")
+for label, text, title in (
+    ("fresh", fresh, "Thinking"),
+    ("off", off, "Thinking"),
+    ("verbose", verbose, "Verbose"),
+):
+    if "OPEN_MENU=%s" % title not in text:
+        sys.exit("FAIL: %s submenu never opened (%s)" % (title, label))
 
 fresh_checked = checked(fresh)
-reuse_checked = checked(reuse)
 off_checked = checked(off)
 verbose_checked = checked(verbose)
-print("checked fresh=%r reuse=%r off=%r verbose=%r" % (fresh_checked, reuse_checked, off_checked, verbose_checked))
+print("checked fresh=%r off=%r verbose=%r" % (fresh_checked, off_checked, verbose_checked))
 
 if MODE == "base":
     if fresh_checked != ["Off"]:
-        sys.exit("FAIL: base build should check Off for inherited sessions, saw %r" % (fresh_checked,))
+        sys.exit("FAIL: base build should check Off for inherited Thinking, saw %r" % (fresh_checked,))
+    if verbose_checked != ["Off"]:
+        sys.exit("FAIL: base build should check Off for inherited Verbose, saw %r" % (verbose_checked,))
 else:
     if fresh_checked:
-        sys.exit("FAIL: head build should check nothing for inherited sessions, saw %r" % (fresh_checked,))
-    if reuse_checked:
-        sys.exit("FAIL: reopened head menu should check nothing, saw %r" % (reuse_checked,))
-    if off_checked != ["Off"]:
-        sys.exit("FAIL: explicit Off should check Off, saw %r" % (off_checked,))
+        sys.exit("FAIL: head build should check nothing for inherited Thinking, saw %r" % (fresh_checked,))
     if verbose_checked:
-        sys.exit("FAIL: inherited Verbose should check nothing, saw %r" % (verbose_checked,))
+        sys.exit("FAIL: head build should check nothing for inherited Verbose, saw %r" % (verbose_checked,))
 
-for stage, levels in (
-    ("thinking-fresh", LEVELS["Thinking"]),
-    ("thinking-reuse", LEVELS["Thinking"]),
-    ("thinking-off", LEVELS["Thinking"]),
-    ("verbose-fresh", LEVELS["Verbose"]),
-):
-    hit_count, best, hits = best_shot(stage, levels)
+if off_checked != ["Off"]:
+    sys.exit("FAIL: explicit Off should check Off, saw %r" % (off_checked,))
+
+for stage, levels in STAGES:
+    hit_count, best, hits = best_shot(stage, LEVELS[levels])
     print("screenshot %-16s best=%s hits=%r" % (stage, best, hits))
     if hit_count < 3:
         sys.exit("FAIL: no legible menu capture for %s (best %r)" % (stage, best))

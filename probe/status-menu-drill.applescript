@@ -1,12 +1,12 @@
--- Open the shipped status menu and drill to a session's Thinking/Verbose
--- submenu, then dump every item's accessibility mark so the proof records
--- which level (if any) the app checked.
+-- Drill into a session row's Thinking/Verbose submenu inside the status menu
+-- that the packaged app opened with --debug-open-menu, then dump every item's
+-- accessibility mark so the proof records which level the app checked.
 --
 -- argv 1: "Thinking" or "Verbose"
 -- argv 2: "1" to click the "Off" item after dumping (applies the override)
 --
--- Returns the dump text. The menu is left open (unless Off was clicked) so the
--- shell can capture the popup window that is on screen.
+-- The menu must already be on screen. Left-clicking the status item opens the
+-- dashboard, so this script never clicks the status item itself.
 
 on menuItemCount(si)
 	set n to 0
@@ -40,59 +40,22 @@ on run argv
 			try
 				set frontmost to true
 			end try
-			delay 0.8
-			-- Close any menu left open by an earlier stage.
-			try
-				key code 53
-			end try
 			delay 1
 			set out to out & "MENUBARS=" & (count of menu bars as string) & linefeed
 			if (count of menu bars) < 2 then return out & "NO_MENUBAR2"
-			set out to out & "STATUS_ITEMS=" & (count of menu bar items of menu bar 2 as string) & linefeed
 			set si to menu bar item 1 of menu bar 2
-			try
-				set out to out & "STATUS_ITEM_DESC=" & (description of si as string) & linefeed
-				set out to out & "STATUS_ITEM_POS=" & (position of si as string) & linefeed
-			end try
-
-			-- The menu is a popup: its items only exist while it is on screen.
-			-- AXPress on a status item is unreliable, so fall back to a real
-			-- click at the item's centre.
 			set count0 to my menuItemCount(si)
-			set openMode to "already-open count=" & (count0 as string)
-			repeat with attempt from 1 to 12
-				set count0 to my menuItemCount(si)
-				if count0 > 0 then exit repeat
-				try
-					click si
-				end try
-				delay 1.5
-				set count0 to my menuItemCount(si)
-				if count0 > 0 then
-					set openMode to "axpress"
-					exit repeat
-				end if
-				try
-					set {sx, sy} to position of si
-					set {sw, sh} to size of si
-					click at {sx + (sw / 2), sy + (sh / 2)}
-					set openMode to "click-at"
-				end try
-				delay 2.5
-				set count0 to my menuItemCount(si)
-				if count0 > 0 then exit repeat
-			end repeat
+			set out to out & "STATUS_ITEM_POS=" & (position of si as string) & linefeed
 			if count0 = 0 then return out & "MENU_NOT_OPEN" & linefeed
-			set out to out & "MENU_OPEN_USING=" & openMode & " items=" & (count0 as string) & linefeed
+			set out to out & "MENU_OPEN items=" & (count0 as string) & linefeed
 
 			set m to menu 1 of si
 			set out to out & "ROOT_ITEMS=" & ((name of every menu item of m) as string) & linefeed
 
 			-- A session row is the item whose submenu owns the Thinking item.
-			-- Session rows arrive after the gateway answers, so poll.
 			set sessionIndex to 0
 			set sessionNames to ""
-			repeat with attempt from 1 to 12
+			repeat with attempt from 1 to 8
 				set m to menu 1 of si
 				repeat with i from 1 to (count of menu items of m)
 					try
@@ -111,7 +74,6 @@ on run argv
 			if sessionIndex = 0 then return out & "NO_SESSION_ITEM items=" & (count of menu items of m as string) & linefeed
 
 			set sessionItem to menu item sessionIndex of m
-			set out to out & "ROOT_ITEMS_AT_CLICK=" & ((name of every menu item of m) as string) & linefeed
 			set out to out & "SESSION_ROW=" & sessionIndex & " items=" & sessionNames & linefeed
 			click sessionItem
 			delay 1.5

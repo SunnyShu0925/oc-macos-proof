@@ -53,7 +53,7 @@ jobs:
 
       - name: Restore build cache
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             openclaw/node_modules
@@ -157,9 +157,7 @@ jobs:
           done < /tmp/pending.txt
           sleep 10
           pnpm openclaw devices list --json 2>&1 | tail -c 800 || true
-          open "$PWD/dist/OpenClaw.app" || true
-          sleep 3
-          osascript -e 'tell application id "ai.openclaw.mac.debug" to activate' || true
+          pkill -f "OpenClaw.app/Contents/MacOS/OpenClaw" || true
           sleep 2
 
       - name: Create a session that inherits the agent defaults
@@ -184,6 +182,22 @@ jobs:
         run: |
           set -euo pipefail
           python3 "$GITHUB_WORKSPACE/proof/probe/assert-menu.py" '${{ inputs.mode }}'
+
+      - name: Detect built app
+        id: built
+        working-directory: openclaw
+        if: always()
+        run: |
+          if [ -x "$APP_EXEC" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Save build cache
+        if: always() && steps.built.outputs.present == 'true' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          key: menu-${{ inputs.mode }}-${{ inputs.app_rev }}
+          path: |
+            openclaw/node_modules
+            openclaw/dist
 
       - name: Collect
         if: always()
