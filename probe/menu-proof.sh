@@ -24,8 +24,10 @@ start_app() {
   sleep 3
   touch "$ENABLED"
   rm -f "$REQUEST" "$STATE"
-  "$APP_EXEC" --attach-only > /tmp/app.log 2>&1 &
+  "$APP_EXEC" --attach-only --debug-probe-rightclick > /tmp/app.log 2>&1 &
   sleep 12
+  osascript -e 'tell application id "ai.openclaw.mac.debug" to activate' >/dev/null 2>&1 || true
+  sleep 8
   APP_PID=$(pgrep -f "$APP_EXEC" | head -1 || true)
   export APP_PID
   echo "START app_pid=${APP_PID:-none}"
