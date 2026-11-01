@@ -24,7 +24,7 @@ start_app() {
   sleep 3
   touch "$ENABLED"
   rm -f "$REQUEST" "$STATE"
-  "$APP_EXEC" --attach-only --debug-probe-rightclick > /tmp/app.log 2>&1 &
+  open "$APP_BUNDLE" --args --attach-only --debug-probe-rightclick
   sleep 12
   osascript -e 'tell application id "ai.openclaw.mac.debug" to activate' >/dev/null 2>&1 || true
   sleep 8
