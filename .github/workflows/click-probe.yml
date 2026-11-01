@@ -27,15 +27,15 @@ jobs:
         run: |
           set +e
           P="$PWD/probe"
-          POS=$(osascript -e 'tell application "System Events" to tell (first process whose name is "MenuProbe") to get position of menu bar item 1 of menu bar 2')
-          SIZE=$(osascript -e 'tell application "System Events" to tell (first process whose name is "MenuProbe") to get size of menu bar item 1 of menu bar 2')
-          echo "POS=$POS SIZE=$SIZE"
-          X=$(python3 -c "import sys; p=[float(v) for v in sys.argv[1].replace(' ','').split(',')]; s=[float(v) for v in sys.argv[2].replace(' ','').split(',')]; print(int(p[0]+s[0]/2)); print(int(p[1]+s[1]/2))" "$POS" "$SIZE" | sed -n 1p)
-          Y=$(python3 -c "import sys; p=[float(v) for v in sys.argv[1].replace(' ','').split(',')]; s=[float(v) for v in sys.argv[2].replace(' ','').split(',')]; print(int(p[1]+s[1]/2))" "$POS" "$SIZE")
+          LINE=$(grep BUTTON_CENTER /tmp/click.log | tail -1)
+          echo "COORD_LINE=$LINE"
+          X=$(echo "$LINE" | awk '{print $2}')
+          Y=$(echo "$LINE" | awk '{print $3}')
           echo "CLICK_POINT=$X,$Y"
+          if [ -z "$X" ] || [ -z "$Y" ]; then echo "NO_COORDS"; cat /tmp/click.log; exit 0; fi
 
           echo "=== A: plain left click"
-          osascript -e "tell application \"System Events\" to click at {$X, $Y}"
+          osascript -e "tell application \"System Events\" to click at {$X, $Y}" 2>&1
           sleep 2
           tail -6 /tmp/click.log || true
           swift "$P/menu-windows.swift" MenuProbe || true
@@ -43,9 +43,9 @@ jobs:
           sleep 1
 
           echo "=== B: control + left click"
-          osascript -e 'tell application "System Events" to key down control' || true
-          osascript -e "tell application \"System Events\" to click at {$X, $Y}" || true
-          osascript -e 'tell application "System Events" to key up control' || true
+          osascript -e 'tell application "System Events" to key down control' 2>&1
+          osascript -e "tell application \"System Events\" to click at {$X, $Y}" 2>&1
+          osascript -e 'tell application "System Events" to key up control' 2>&1
           sleep 2
           tail -6 /tmp/click.log || true
           swift "$P/menu-windows.swift" MenuProbe || true
@@ -60,7 +60,5 @@ jobs:
           osascript -e 'tell application "System Events" to key code 53' || true
           sleep 1
 
-          echo "=== final windows"
-          swift "$P/menu-windows.swift" MenuProbe || true
           echo "=== final log"
           cat /tmp/click.log || true
