@@ -27,10 +27,13 @@ jobs:
         run: |
           set +e
           P="$PWD/probe"
-          swift "$P/menu-windows.swift" MenuProbe 0 | tee /tmp/win.txt
-          read -r X Y < <(python3 "$P/status-point.py" /tmp/win.txt) || true
+          sleep 5
+          LINE=$(grep BUTTON_CENTER /tmp/click.log | tail -1)
+          echo "COORD_LINE=$LINE"
+          X=$(echo "$LINE" | awk '{print $2}')
+          Y=$(echo "$LINE" | awk '{print $3}')
           echo "CLICK_POINT=$X,$Y"
-          if [ -z "${X:-}" ] || [ -z "${Y:-}" ]; then echo "NO_COORDS"; exit 0; fi
+          if [ -z "${X:-}" ] || [ -z "${Y:-}" ]; then echo "NO_COORDS"; cat /tmp/click.log; exit 0; fi
 
           echo "=== A: plain left click"
           osascript -e "tell application \"System Events\" to click at {$X, $Y}" 2>&1

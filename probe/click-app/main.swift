@@ -41,15 +41,14 @@ final class ClickProbe: NSObject, NSApplicationDelegate {
             return nil
         }
         self.log("READY pid=\(ProcessInfo.processInfo.processIdentifier)")
-        if let window = self.statusItem.button?.window, let screen = window.screen {
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            guard let self, let window = self.statusItem.button?.window, let screen = window.screen else { return }
             let frame = window.frame
-            let screenHeight = screen.frame.height
             let centerX = frame.origin.x + frame.width / 2
-            let centerY = screenHeight - (frame.origin.y + frame.height / 2)
-            self.log("BUTTON_CENTER \(Int(centerX)) \(Int(centerY)) screen=\(Int(screen.frame.width))x\(Int(screenHeight))")
-        } else {
-            self.log("BUTTON_WINDOW_MISSING")
+            let centerY = screen.frame.height - (frame.origin.y + frame.height / 2)
+            self.log("BUTTON_CENTER \(Int(centerX)) \(Int(centerY)) frame=\(Int(frame.origin.x)),\(Int(frame.origin.y)),\(Int(frame.width)),\(Int(frame.height))")
         }
+
     }
 
     @objc func clicked(_ sender: Any?) {
