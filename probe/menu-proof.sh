@@ -43,15 +43,38 @@ close_menu() {
   sleep 2
 }
 
+# One popup screenshot of the root menu, used to watch the session rows load.
+probe_root() {
+  local id
+  id=$(swift "$P/menu-windows.swift" 2>/dev/null | grep -o 'POPUP id=[0-9]*' | head -1 | cut -d= -f2)
+  if [ -z "$id" ]; then
+    echo "PROBE_NO_POPUP"
+    return 1
+  fi
+  screencapture -x -o -l "$id" /tmp/shots/probe.png 2>/dev/null || return 1
+  swift "$P/ocr-window.swift" /tmp/shots/probe.png > /tmp/ocr-probe.txt 2>&1
+  echo "PROBE_OCR :: $(tr '\n' '|' < /tmp/ocr-probe.txt)"
+  return 0
+}
+
 # Session rows load asynchronously after the gateway handshake; the first menu
-# render can still say "No recent sessions", so reopen a couple of times.
+# render can still say "No recent sessions", so keep reopening until the store
+# has the session this capture is about.
 warm_up() {
   local i
-  for i in 1 2 3; do
+  for i in 1 2 3 4 5 6 7 8 9 10; do
     request root
+    probe_root || true
     close_menu
-    sleep 2
+    if ! grep -q "No recent sessions" /tmp/ocr-probe.txt 2>/dev/null; then
+      echo "SESSIONS_READY try=$i"
+      return 0
+    fi
+    echo "SESSIONS_PENDING try=$i"
+    sleep 5
   done
+  echo "SESSIONS_MISSING"
+  return 1
 }
 
 open_submenu() {
