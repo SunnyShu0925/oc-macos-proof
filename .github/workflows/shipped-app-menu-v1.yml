@@ -189,6 +189,8 @@ jobs:
           set +e
           bash "$GITHUB_WORKSPACE/proof/probe/menu-proof.sh" 2>&1 | tee /tmp/menu-proof.log
           echo "MENU_PROOF_EXIT=$?"
+          log show --last 15m --predicate 'process == "OpenClaw"' --style compact > /tmp/app-oslog.txt 2>&1 || true
+          grep -iE "attach|connect|gateway|session|error" /tmp/app-oslog.txt | tail -40 || true
 
       - name: Assert menu state from the accessibility dump
         run: |
@@ -229,4 +231,6 @@ jobs:
             /tmp/gateway.log
             /tmp/stub.log
             /tmp/doctor.log
+            /tmp/app.log
+            /tmp/app-oslog.txt
             /tmp/devices-before.json

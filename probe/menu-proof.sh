@@ -24,7 +24,7 @@ start_app() {
   sleep 3
   touch "$ENABLED"
   rm -f "$REQUEST" "$STATE"
-  open "$APP_BUNDLE" --args --attach-only
+  "$APP_EXEC" --attach-only > /tmp/app.log 2>&1 &
   sleep 12
   APP_PID=$(pgrep -f "$APP_EXEC" | head -1 || true)
   export APP_PID
