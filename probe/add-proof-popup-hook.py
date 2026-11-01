@@ -67,21 +67,27 @@ HOOK = ANCHOR + """
                     try? FileManager.default.removeItem(atPath: request)
                     let command = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard let button = self.statusItem?.button else { return }
-                    if let submenu = proofFindSubmenu(command) {
+                    if command == "Thinking" || command == "Verbose" {
+                        // The session rows load asynchronously; leave the menu
+                        // closed when the submenu is not built yet so the
+                        // capture can retry instead of showing the root menu.
+                        guard let submenu = proofFindSubmenu(command) else { return }
                         self.statusItem?.menu = nil
                         recordProofMenuState(submenu)
                         submenu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: button)
-                    } else if command.hasSuffix("-off"),
-                              let submenu = proofFindSubmenu(String(command.dropLast(4))),
-                              let index = submenu.items.firstIndex(where: { $0.title == "Off" })
+                        return
+                    }
+                    if command.hasSuffix("-off"),
+                       let submenu = proofFindSubmenu(String(command.dropLast(4))),
+                       let index = submenu.items.firstIndex(where: { $0.title == "Off" })
                     {
                         submenu.performActionForItem(at: index)
                         recordProofMenuState(submenu)
-                    } else {
-                        self.statusItem?.menu = self.menu
-                        self.menu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: button)
-                        self.statusItem?.menu = nil
+                        return
                     }
+                    self.statusItem?.menu = self.menu
+                    self.menu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: button)
+                    self.statusItem?.menu = nil
                 }
             }
             pollProofMenu()

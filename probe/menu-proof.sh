@@ -31,11 +31,45 @@ start_app() {
   echo "START app_pid=${APP_PID:-none}"
 }
 
-command() {
+request() {
   local name="$1"
   rm -f "$REQUEST"
   printf '%s' "$name" > "$REQUEST"
   sleep 3
+}
+
+close_menu() {
+  osascript -e 'tell application "System Events" to key code 53' >/dev/null 2>&1 || true
+  sleep 2
+}
+
+# Session rows load asynchronously after the gateway handshake; the first menu
+# render can still say "No recent sessions", so reopen a couple of times.
+warm_up() {
+  local i
+  for i in 1 2 3; do
+    request root
+    close_menu
+    sleep 2
+  done
+}
+
+open_submenu() {
+  local name="$1" i
+  for i in 1 2 3 4 5 6; do
+    rm -f "$STATE"
+    request "$name"
+    if [ -s "$STATE" ]; then
+      echo "SUBMENU_READY name=$name try=$i"
+      return 0
+    fi
+    echo "SUBMENU_RETRY name=$name try=$i"
+    request root
+    close_menu
+    sleep 2
+  done
+  echo "SUBMENU_MISSING name=$name"
+  return 1
 }
 
 capture() {
@@ -62,35 +96,34 @@ capture() {
   screencapture -x "$OUT/full-$stage.png" || true
 }
 
-close_menu() {
-  osascript -e 'tell application "System Events" to key code 53' >/dev/null 2>&1 || true
-  sleep 2
-}
-
 start_app
+warm_up
 
 # 0. Whole status menu: shows the session row this capture works with.
-command root
+request root
 capture root
 close_menu
 
 # 1. Inherited Thinking (agents.defaults.thinkingDefault=high): no "Off" mark.
-command Thinking
-capture thinking-fresh
-close_menu
+if open_submenu Thinking; then
+  capture thinking-fresh
+  close_menu
+fi
 
 # 2. Choosing Off through the shipping menu item applies the override.
-command Thinking-off
+request Thinking-off
 sleep 5
 
 # 3. The reopened submenu must show the stored override.
-command Thinking
-capture thinking-off
-close_menu
+if open_submenu Thinking; then
+  capture thinking-off
+  close_menu
+fi
 
 # 4. Inherited Verbose (agents.defaults.verboseDefault=on): no "Off" mark.
-command Verbose
-capture verbose-fresh
-close_menu
+if open_submenu Verbose; then
+  capture verbose-fresh
+  close_menu
+fi
 
 echo "MENU_PROOF_DONE"
