@@ -176,7 +176,7 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          bash "$GITHUB_WORKSPACE/proof/probe/menu-proof.sh" 2>&1 | tee /tmp/menu-proof.log
+          MENU_FLAGS="${MENU_FLAGS:---attach-only --debug-probe-rightclick}" bash "$GITHUB_WORKSPACE/proof/probe/menu-proof.sh" 2>&1 | tee /tmp/menu-proof.log
           echo "MENU_PROOF_EXIT=$?"
 
       - name: Assert menu state from the accessibility dump

@@ -18,11 +18,12 @@ APP_EXEC="$APP_BUNDLE/Contents/MacOS/OpenClaw"
 relaunch() {
   pkill -f "$APP_EXEC" 2>/dev/null || true
   sleep 3
-  open "$APP_BUNDLE" --args --attach-only --debug-open-menu
+  open "$APP_BUNDLE" --args ${MENU_FLAGS:---attach-only --debug-open-menu}
   sleep 12
   APP_PID=$(pgrep -f "$APP_EXEC" | head -1 || true)
   export APP_PID
-  echo "RELAUNCH app_pid=${APP_PID:-none}"
+  echo "RELAUNCH app_pid=${APP_PID:-none} flags=${MENU_FLAGS:---attach-only --debug-open-menu}"
+  swift "$P/menu-windows.swift" 2>&1 | head -5
 }
 
 drill() {
