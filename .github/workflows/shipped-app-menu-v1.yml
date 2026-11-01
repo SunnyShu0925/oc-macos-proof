@@ -72,6 +72,18 @@ jobs:
         timeout-minutes: 25
         run: pnpm install --frozen-lockfile
 
+      - name: Build JS for a cached app
+        if: steps.app.outputs.built == 'true'
+        working-directory: openclaw
+        timeout-minutes: 30
+        run: |
+          if [ -f node_modules/@openclaw/ai/dist/diagnostics.mjs ]; then
+            echo "workspace deps already built"
+          else
+            pnpm build
+          fi
+          ls node_modules/@openclaw/ai/dist/diagnostics.mjs
+
       - name: Prepare apple mermaid assets
         working-directory: openclaw
         run: node scripts/prepare-apple-mermaid.mjs
