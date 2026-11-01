@@ -55,10 +55,8 @@ jobs:
         id: cache
         uses: actions/cache/restore@v4
         with:
-          path: |
-            openclaw/node_modules
-            openclaw/dist
-          key: menu-${{ inputs.mode }}-${{ inputs.app_rev }}
+          path: openclaw/dist
+          key: menu-${{ inputs.mode }}-${{ inputs.app_rev }}-dist
 
       - name: Detect prebuilt app
         id: app
@@ -73,18 +71,6 @@ jobs:
         working-directory: openclaw
         timeout-minutes: 25
         run: pnpm install --frozen-lockfile
-
-      - name: Rebuild workspace package dist for a cached tree
-        if: steps.app.outputs.built == 'true'
-        working-directory: openclaw
-        timeout-minutes: 25
-        run: |
-          if [ -f packages/ai/dist/diagnostics.mjs ]; then
-            echo "workspace dist already present"
-          else
-            pnpm -r --filter "./packages/*" --if-present run build
-            ls packages/ai/dist | head -5
-          fi
 
       - name: Prepare apple mermaid assets
         working-directory: openclaw
