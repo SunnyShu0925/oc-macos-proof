@@ -69,6 +69,11 @@ jobs:
             echo "reusing cached app bundle"
           fi
 
+      - name: Install dependencies
+        working-directory: openclaw
+        timeout-minutes: 25
+        run: pnpm install --frozen-lockfile
+
       - name: Rebuild workspace package dist for a cached tree
         if: steps.app.outputs.built == 'true'
         working-directory: openclaw
@@ -78,12 +83,8 @@ jobs:
             echo "workspace dist already present"
           else
             pnpm -r --filter "./packages/*" --if-present run build
+            ls packages/ai/dist | head -5
           fi
-
-      - name: Install dependencies
-        working-directory: openclaw
-        timeout-minutes: 25
-        run: pnpm install --frozen-lockfile
 
       - name: Prepare apple mermaid assets
         working-directory: openclaw
