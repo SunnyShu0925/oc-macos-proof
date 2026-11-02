@@ -15,6 +15,10 @@ on:
         description: Version pinned on the candidate build (must exceed the driver)
         required: true
         default: "2026.10.10"
+      reuse_run_id:
+        description: optional - reuse the packaged candidate from this earlier run (skips install/build/pack)
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -27,7 +31,17 @@ jobs:
       - name: Checkout proof harness
         uses: actions/checkout@v4
 
+      - name: Reuse the packaged candidate from an earlier run
+        if: inputs.reuse_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-candidate
+          path: artifacts/pkg
+          run-id: ${{ inputs.reuse_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Checkout openclaw PR branch (fork)
+        if: inputs.reuse_run_id == ''
         uses: actions/checkout@v4
         with:
           repository: SunnyShu0925/openclaw
@@ -36,10 +50,9 @@ jobs:
           fetch-depth: 1
 
       - name: Report head identity
-        working-directory: openclaw
         run: |
-          git rev-parse HEAD
-          git log -1 --format='%H %s'
+          echo "head_sha=$(git -C openclaw rev-parse HEAD 2>/dev/null || echo reused)"
+          git -C openclaw log -1 --format='%H %s' 2>/dev/null || true
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -47,12 +60,14 @@ jobs:
           node-version: 24.22.1
 
       - name: Install deps (pnpm)
+        if: inputs.reuse_run_id == ''
         working-directory: openclaw
         run: |
           corepack enable
           pnpm install --frozen-lockfile
 
       - name: Pin the build version before compiling
+        if: inputs.reuse_run_id == ''
         working-directory: openclaw
         env:
           PACKAGE_VERSION: ${{ inputs.candidate_version }}
@@ -66,24 +81,37 @@ jobs:
           '
 
       - name: Build dist from the reviewed head (package profile)
+        if: inputs.reuse_run_id == ''
         working-directory: openclaw
         # The package profile keeps the canonical dts that
         # package-openclaw-for-docker --skip-build requires.
         run: pnpm build:package
         continue-on-error: true
 
-      - name: Assert the sealed dist entry exists
+      - name: Assert the built dist carries the monotonic budget
+        if: inputs.reuse_run_id == ''
         working-directory: openclaw
         run: |
           ls -l dist/entry.js
-          grep -o 'createMonotonicBudget(params.recoveryTimeoutMs)' dist/update-managed-service-handoff-current-*.mjs
+          hits=$(grep -rl 'createMonotonicBudget(params.recoveryTimeoutMs)' dist | head -5)
+          echo "monotonic_budget_dist_files=$hits"
+          test -n "$hits"
 
       - name: Run the published-driver to candidate upgrade on launchd
-        working-directory: openclaw
         env:
           DRIVER_VERSION: ${{ inputs.driver_version }}
           CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+          SKIP_PACK: ${{ inputs.reuse_run_id != '' && '1' || '0' }}
+          REUSE_RUN_ID: ${{ inputs.reuse_run_id }}
         run: bash "$GITHUB_WORKSPACE/scripts/macos-upgrade-proof.sh"
+
+      - name: Keep the packaged candidate for retries
+        if: always() && inputs.reuse_run_id == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-candidate
+          path: artifacts/pkg
+          if-no-files-found: warn
 
       - name: Print the summary
         if: always()

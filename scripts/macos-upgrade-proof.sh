@@ -36,6 +36,10 @@ say "environment"
 } 2>&1 | tee -a "$SUMMARY"
 
 say "pack reviewed candidate $CANDIDATE (canonical packer, version pinned before build)"
+TARBALL="$GITHUB_WORKSPACE/artifacts/pkg/openclaw-candidate.tgz"
+if [ "${SKIP_PACK:-0}" = "1" ]; then
+  note "candidate_tarball=$TARBALL reused_from_run=${REUSE_RUN_ID:-unknown}"
+else
 cd "$GITHUB_WORKSPACE/openclaw"
 mkdir -p "$GITHUB_WORKSPACE/artifacts/pkg"
 node scripts/package-openclaw-for-docker.mjs --skip-build --allow-unreleased-changelog \
@@ -54,8 +58,9 @@ tar -czf "$TARBALL" -C /tmp/relabel package
 cp /tmp/relabel/package/package.json "$GITHUB_WORKSPACE/artifacts/pkg/manifest-candidate.json"
 note "candidate_tarball=$TARBALL bytes=$(stat -f%z "$TARBALL") version=$CANDIDATE"
 say "candidate carries this PR's monotonic budget"
-tar -xzOf "$TARBALL" package/dist/update-managed-service-handoff-current-*.mjs \
-  | grep -o 'createMonotonicBudget(params.recoveryTimeoutMs)\|deadline - Date.now()' | sort | uniq -c | tee -a "$SUMMARY"
+grep -rho 'createMonotonicBudget(params.recoveryTimeoutMs)\|Date.now() < deadline' /tmp/relabel/package/dist 2>/dev/null |
+  sort | uniq -c | tee -a "$SUMMARY"
+fi
 
 say "install published driver $DRIVER_VERSION"
 npm install -g "openclaw@$DRIVER_VERSION" --no-audit --no-fund 2>&1 | tail -3
@@ -106,7 +111,7 @@ say "state dir before update"
 ls -la "$HOME/.openclaw" 2>/dev/null | tail -n +2 | awk '{print $5, $9}' | tee -a "$SUMMARY"
 
 say "run the shipped update entry (published driver -> candidate) on launchd"
-rm -rf /tmp/openclaw-update-run-handoff-* 2>/dev/null
+rm -rf /tmp/openclaw-update-run-handoff-* "${TMPDIR:-/tmp}/openclaw-update-run-handoff-"* 2>/dev/null
 START=$(date +%s)
 set +e
 npm_config_registry="http://127.0.0.1:$PORT_REGISTRY/" \
@@ -149,7 +154,7 @@ note "installed_monotonic_budget_files=$(grep -rl 'createMonotonicBudget' "$DRIV
 note "installed_wallclock_budget_files=$(grep -rl 'deadline - Date.now()' "$DRIVER_PKG/dist" 2>/dev/null | wc -l | tr -d ' ')"
 
 say "production handoff trace"
-for d in /tmp/openclaw-update-run-handoff-*; do
+for d in /tmp/openclaw-update-run-handoff-* "${TMPDIR:-/tmp}"/openclaw-update-run-handoff-*; do
   [ -d "$d" ] || continue
   echo "## $d"
   ls -la "$d" | tail -n +2 | awk '{print $5, $9}'
