@@ -172,7 +172,6 @@ writeFileSync(plistPath, `<?xml version="1.0" encoding="UTF-8"?>
 </dict>
 </plist>
 `);
-writeFileSync(harnessFile, script);
 
 // ---------------------------------------------------------------------------
 // Seed the real launchd job: bootstrap ONCE with RunAtLoad=false so the job is
@@ -255,6 +254,7 @@ const markerHook = `
 const __origRSC2 = runServiceCommand;
 let __firstPrint = true;
 runServiceCommand = (cmd, args, onSpawn, deadline, timeoutCap) => {
+  console.error("[marker] call cmd=" + cmd + " args0=" + (args && args[0]) + " first=" + __firstPrint);
   const p = __origRSC2(cmd, args, onSpawn, deadline, timeoutCap);
   // Step the clock AFTER the first genuine launchctl print RESOLVES (spawn done,
   // deadline already consumed at real time) but BEFORE the recovery loop's
@@ -264,13 +264,17 @@ runServiceCommand = (cmd, args, onSpawn, deadline, timeoutCap) => {
   // print would corrupt that print's own deadline - Date.now() for FIXED.
   if (cmd === "launchctl" && args[0] === "print" && __firstPrint) {
     __firstPrint = false;
-    return p.then((res) => { globalThis.__stepClock(); return res; });
+    console.error("[marker] first print hit, typeof __stepClock=" + typeof globalThis.__stepClock);
+    return p.then((res) => { console.error("[marker] calling __stepClock"); globalThis.__stepClock(); return res; });
   }
   return p;
 };
 `;
 // Insert the marker hook right after the DEBUG hook.
 script = script.replace("// ===== invoke the recovery as the helper does =====", markerHook + "\n// ===== invoke the recovery as the helper does =====");
+console.error("[driver] markerHook inserted=" + script.includes("__firstPrint"));
+writeFileSync(harnessFile, script);
+writeFileSync("/tmp/186831-harness.mjs", script);
 
 const preloadFile = join(dir, "clock-preload.mjs");
 writeFileSync(preloadFile, preload);
