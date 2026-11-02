@@ -59,6 +59,10 @@ async function candidatePackument() {
         "bin",
         "os",
         "cpu",
+        // Without this the installer ignores the tarball's bundled workspace
+        // runtime and fetches the published sibling instead, which resolves a
+        // second dependency tree the reviewed build was not compiled against.
+        "bundleDependencies",
       ]
         .filter((key) => manifest[key] !== undefined)
         .map((key) => [key, manifest[key]]),
@@ -98,6 +102,15 @@ const server = http.createServer(async (request, response) => {
     if (url.pathname === "/openclaw" || url.pathname === "/openclaw/") {
       const { status, body } = await candidatePackument();
       response.writeHead(status, { "content-type": "application/json" });
+      response.end(body);
+      return;
+    }
+    if (url.pathname === `/openclaw/${CANDIDATE_VERSION}`) {
+      const packument = await candidatePackument();
+      const doc = JSON.parse(packument.body.toString("utf8"));
+      const body = Buffer.from(JSON.stringify(doc.versions[CANDIDATE_VERSION]));
+      log(`version doc ${CANDIDATE_VERSION}`);
+      response.writeHead(200, { "content-type": "application/json" });
       response.end(body);
       return;
     }

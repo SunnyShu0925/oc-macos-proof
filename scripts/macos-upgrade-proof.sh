@@ -104,6 +104,7 @@ cp /tmp/relabel/package/package.json "$MANIFEST"
 TARBALL="$STAGED_TARBALL"
 note "served_candidate_tarball=$TARBALL bytes=$(stat -f%z "$TARBALL") manifest=$MANIFEST"
 note "candidate_package_version=$(node -e 'console.log(require("/tmp/relabel/package/package.json").version)' 2>&1 | tail -1)"
+note "served_bundled_runtime=$(tar -tzf "$STAGED_TARBALL" | grep -c '^package/node_modules/@openclaw/ai/package.json$' | tr -d ' ') served_bundle_deps=$(node -e 'const d=require("/tmp/relabel/package/package.json");console.log(JSON.stringify(d.bundleDependencies||[]))' 2>&1 | tail -1)"
 say "candidate carries this PR's monotonic budget"
 grep -rho 'createMonotonicBudget(params.recoveryTimeoutMs)\|Date.now() < deadline' /tmp/relabel/package/dist 2>/dev/null |
   sort | uniq -c | tee -a "$SUMMARY"
@@ -415,6 +416,12 @@ for root in "$STAGE/lib/node_modules/openclaw" "$STAGE/node_modules/openclaw"; d
   note "stageD_root=$root nested_modules=$(ls "$root/node_modules" 2>/dev/null | wc -l | tr -d ' ') hoisted=$(ls "$(dirname "$root")" 2>/dev/null | tr '\n' ' ' | head -c 200)"
   note "stageD_typebox=$(ls -d "$root/node_modules/typebox" "$(dirname "$root")/typebox" 2>/dev/null | tr '\n' ' ')"
   note "stageD_ai=$(ls -d "$root/node_modules/@openclaw/ai" "$(dirname "$root")/@openclaw/ai" 2>/dev/null | tr '\n' ' ')"
+  ai="$(ls -d "$root/node_modules/@openclaw/ai" 2>/dev/null | head -1)"
+  if [ -n "$ai" ]; then
+    note "stageD_ai_declares=$(node -e 'const d=require(process.argv[1]);console.log(d.version,"deps="+JSON.stringify(d.dependencies||null),"typebox="+(d.dependencies||{}).typebox)' "$ai/package.json" 2>&1 | tail -1)"
+    note "stageD_ai_nested=$(ls "$ai/node_modules" 2>/dev/null | tr '\n' ' ' | head -c 200)"
+    note "stageD_ai_typebox_guard=$(ls -d "$ai/node_modules/typebox/guard" "$root/node_modules/typebox/guard" 2>/dev/null | tr '\n' ' ')"
+  fi
   ( cd "$root" && OPENCLAW_NO_RESPAWN=1 node dist/entry.js doctor --non-interactive --json ) \
     >/tmp/doctor-d.json 2>/tmp/doctor-d.err
   note "stageD_doctor_exit=$? doctor_err=$(tail -c 500 /tmp/doctor-d.err | tr '\n' ';')"
