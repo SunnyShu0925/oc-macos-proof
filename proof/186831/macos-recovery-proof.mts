@@ -231,22 +231,19 @@ const params = {
 };
 
 const preload = `
-import fs from "node:fs";
 const realDateNow = Date.now;
 let stepped = false;
 let offset = 0;
 Date.now = () => { return realDateNow() + offset; };
-const marker = process.env.PROOF_MARKER;
-const probe = () => {
-  if (stepped || !marker) return;
-  if (fs.existsSync(marker)) {
-    stepped = true;
-    offset = Number(process.env.STEP_FORWARD_MS || 0);
-    console.error("[clock] stepping Date.now() forward by " + offset + "ms");
-    clearInterval(timer);
-  }
+// Synchronous step: the harness calls __stepClock() right when the recovery
+// loop's FIRST launchctl print runs (budget already seeded). No async poll
+// timer, so there is no race with the fast recovery loop.
+globalThis.__stepClock = () => {
+  if (stepped) return;
+  stepped = true;
+  offset = Number(process.env.STEP_FORWARD_MS || 0);
+  console.error("[clock] stepping Date.now() forward by " + offset + "ms");
 };
-const timer = setInterval(probe, 10);
 `;
 
 // The PROOF_MARKER must be touched by the FIRST genuine launchctl print in the
@@ -258,7 +255,9 @@ const markerHook = `
 const __origRSC2 = runServiceCommand;
 runServiceCommand = (cmd, args, onSpawn, deadline, timeoutCap) => {
   if (cmd === "launchctl" && args[0] === "print") {
-    try { fs.writeFileSync(process.env.PROOF_MARKER, "x"); } catch {}
+    // Budget is seeded before the first print call; step the clock synchronously
+    // so the forward jump lands before the loop's remainingMs() read.
+    if (globalThis.__stepClock) { globalThis.__stepClock(); }
   }
   return __origRSC2(cmd, args, onSpawn, deadline, timeoutCap);
 };
