@@ -1,0 +1,57 @@
+name: macOS Recovery-Deadline Proof (PR #186831)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: PR branch on SunnyShu0925/openclaw to test
+        required: true
+        default: fix/managed-service-handoff-recovery-deadline-wall-clock-165
+
+jobs:
+  proof:
+    runs-on: macos-14
+    steps:
+      - name: Checkout openclaw PR branch (fork)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ github.event.inputs.pr_branch }}
+          path: openclaw
+
+      - name: Checkout proof scripts
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: main
+          path: proofrepo
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+
+      - name: Install deps (pnpm)
+        working-directory: openclaw
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      # --- macOS native-launchd recovery, forward wall-clock step ---
+      - name: Recovery FIXED (performance.now budget)
+        working-directory: openclaw
+        run: node --import tsx/esm $GITHUB_WORKSPACE/proofrepo/proof/186831/macos-recovery-proof.mts FIXED 30000 60000
+        env:
+          OPENCLAW_DIR: ${{ github.workspace }}/openclaw
+
+      - name: Recovery OLD (Date.now deadline)
+        working-directory: openclaw
+        run: node --import tsx/esm $GITHUB_WORKSPACE/proofrepo/proof/186831/macos-recovery-proof.mts OLD 30000 60000
+        env:
+          OPENCLAW_DIR: ${{ github.workspace }}/openclaw
+
+      - name: Collect verdict
+        if: always()
+        run: |
+          echo "### macOS native-launchd recovery forward-step proof (PR #186831)"
+          echo "See the two 'Recovery FIXED/OLD' step logs for VERDICT lines."
