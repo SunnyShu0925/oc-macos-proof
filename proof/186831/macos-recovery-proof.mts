@@ -199,12 +199,28 @@ console.error("[setup] seed print head: " + seedPrint.stdout.split("\n").slice(0
 // parentPid = this driver process; recovery compares printed pid against it.
 const parentPid = process.pid;
 
+// Stub readiness-probe module: restoreGatewayService imports
+// params.recoveryModulePath and calls waitForGatewayUpdateRecovery() after the
+// launchd loop restores the service. The deadline under test is the recovery
+// loop budget, not the readiness probe, so the probe answers healthy with the
+// expected version/build id immediately.
+const recoveryModulePath = join(dir, "recovery-probe.mjs");
+writeFileSync(
+  recoveryModulePath,
+  `export async function waitForGatewayUpdateRecovery(version, buildId, timeoutMs) {
+  return { healthy: true, runtime: { status: "running", pid: ${parentPid} },
+    gatewayVersion: version, gatewayBuildId: buildId, channelProbeErrors: [], activatedPluginErrors: [] };
+}`
+);
+
 const params = {
   serviceRecovery: { kind: "launchd", uid, label, plistPath },
   recoveryTimeoutMs,
   parentPid,
   updateLeaseKey: leaseKey,
   recoveryCommandArgv: ["true"],
+  recoveryModulePath,
+  runId: "proof-run-186831",
   cwd: dir,
   serviceManagerEnv: {
     ...process.env,
