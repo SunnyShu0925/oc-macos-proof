@@ -253,13 +253,20 @@ globalThis.__stepClock = () => {
 // runServiceCommand in the harness to touch the marker on the first print.
 const markerHook = `
 const __origRSC2 = runServiceCommand;
+let __firstPrint = true;
 runServiceCommand = (cmd, args, onSpawn, deadline, timeoutCap) => {
-  if (cmd === "launchctl" && args[0] === "print") {
-    // Budget is seeded before the first print call; step the clock synchronously
-    // so the forward jump lands before the loop's remainingMs() read.
-    if (globalThis.__stepClock) { globalThis.__stepClock(); }
+  const p = __origRSC2(cmd, args, onSpawn, deadline, timeoutCap);
+  // Step the clock AFTER the first genuine launchctl print RESOLVES (spawn done,
+  // deadline already consumed at real time) but BEFORE the recovery loop's
+  // remainingMs() read. For FIXED, remainingMs uses performance.now so the step
+  // is a no-op on the budget; for OLD, remainingMs() = deadline - Date.now()
+  // collapses to <= 0 and truncates the loop. Stepping synchronously inside the
+  // print would corrupt that print's own deadline - Date.now() for FIXED.
+  if (cmd === "launchctl" && args[0] === "print" && __firstPrint) {
+    __firstPrint = false;
+    return p.then((res) => { globalThis.__stepClock(); return res; });
   }
-  return __origRSC2(cmd, args, onSpawn, deadline, timeoutCap);
+  return p;
 };
 `;
 // Insert the marker hook right after the DEBUG hook.
