@@ -67,10 +67,37 @@ doc.version = process.env.CANDIDATE_VERSION;
 fs.writeFileSync(p, JSON.stringify(doc, null, 2));
 '
 TARBALL="$PKG_DIR/openclaw-candidate.tgz"
-tar -czf "$TARBALL" -C /tmp/relabel package
-cp /tmp/relabel/package/package.json "$PKG_DIR/manifest-candidate.json"
 note "candidate_tarball=$TARBALL bytes=$(stat -f%z "$TARBALL") version=$CANDIDATE"
 fi
+
+say "rewrite the candidate manifest the way a published release ships it"
+# A packed head tree still carries "workspace:*" specs, which npm cannot resolve
+# from the registry; published manifests carry the sibling version instead.
+CANDIDATE_VERSION="$CANDIDATE" SIBLING_VERSION="$DRIVER_VERSION" node -e '
+const fs = require("node:fs");
+const p = "/tmp/relabel/package/package.json";
+const doc = JSON.parse(fs.readFileSync(p, "utf8"));
+doc.version = process.env.CANDIDATE_VERSION;
+const rewritten = [];
+for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+  const map = doc[field];
+  if (!map) continue;
+  for (const [name, spec] of Object.entries(map)) {
+    if (String(spec).startsWith("workspace:")) {
+      map[name] = process.env.SIBLING_VERSION;
+      rewritten.push(`${name}@${process.env.SIBLING_VERSION}`);
+    }
+  }
+}
+fs.writeFileSync(p, JSON.stringify(doc, null, 2));
+console.log("manifest_workspace_specs_rewritten=" + (rewritten.join(",") || "none"));
+console.log("candidate_manifest_version=" + doc.version + " typebox=" + (doc.dependencies || {}).typebox);
+' | tee -a "$SUMMARY"
+STAGED_TARBALL="/tmp/openclaw-candidate-$CANDIDATE.tgz"
+tar -czf "$STAGED_TARBALL" -C /tmp/relabel package
+cp /tmp/relabel/package/package.json "$MANIFEST"
+TARBALL="$STAGED_TARBALL"
+note "served_candidate_tarball=$TARBALL bytes=$(stat -f%z "$TARBALL") manifest=$MANIFEST"
 note "candidate_package_version=$(node -e 'console.log(require("/tmp/relabel/package/package.json").version)' 2>&1 | tail -1)"
 say "candidate carries this PR's monotonic budget"
 grep -rho 'createMonotonicBudget(params.recoveryTimeoutMs)\|Date.now() < deadline' /tmp/relabel/package/dist 2>/dev/null |
@@ -356,6 +383,25 @@ for stage in "$NPM_PREFIX"/lib/node_modules/.openclaw.update-stage-*/lib/node_mo
   note "stagecheck_stderr=$(head -c 600 /tmp/stagecheck.err | tr '\n' ';')"
 done
 ls -1d "$NPM_PREFIX"/lib/node_modules/.openclaw.update-stage-* "$NPM_PREFIX"/lib/openclaw-update-runtime-* 2>/dev/null | tee -a "$SUMMARY"
+
+say "phase D: reproduce the updater's staged candidate install and inspect its tree"
+STAGE="$NPM_PREFIX/lib/node_modules/.openclaw.update-stage-manual"
+rm -rf "$STAGE" && mkdir -p "$STAGE"
+npm_config_registry="http://127.0.0.1:$PORT_REGISTRY/" \
+  npm i -g --allow-scripts=@google/genai,esbuild,koffi,protobufjs,openclaw --prefix "$STAGE" "openclaw@$CANDIDATE" \
+  --no-fund --no-audit --loglevel=error --min-release-age=0 >/tmp/stage-d.npm 2>&1
+note "stageD_npm_exit=$? npm_tail=$(tail -4 /tmp/stage-d.npm | tr '\n' ';')"
+note "stageD_layout=$(ls "$STAGE" "$STAGE/lib" "$STAGE/lib/node_modules" 2>/dev/null | tr '\n' ' ' | head -c 300)"
+for root in "$STAGE/lib/node_modules/openclaw" "$STAGE/node_modules/openclaw"; do
+  [ -d "$root" ] || continue
+  note "stageD_root=$root nested_modules=$(ls "$root/node_modules" 2>/dev/null | wc -l | tr -d ' ') hoisted=$(ls "$(dirname "$root")" 2>/dev/null | tr '\n' ' ' | head -c 200)"
+  note "stageD_typebox=$(ls -d "$root/node_modules/typebox" "$(dirname "$root")/typebox" 2>/dev/null | tr '\n' ' ')"
+  note "stageD_ai=$(ls -d "$root/node_modules/@openclaw/ai" "$(dirname "$root")/@openclaw/ai" 2>/dev/null | tr '\n' ' ')"
+  ( cd "$root" && OPENCLAW_NO_RESPAWN=1 node dist/entry.js doctor --non-interactive --json ) \
+    >/tmp/doctor-d.json 2>/tmp/doctor-d.err
+  note "stageD_doctor_exit=$? doctor_err=$(tail -c 500 /tmp/doctor-d.err | tr '\n' ';')"
+done
+
 say "update failure diagnostics"
 while IFS= read -r f; do
   echo "## $f"
