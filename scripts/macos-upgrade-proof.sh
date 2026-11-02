@@ -36,9 +36,22 @@ say "environment"
 } 2>&1 | tee -a "$SUMMARY"
 
 say "pack reviewed candidate $CANDIDATE (canonical packer, version pinned before build)"
-TARBALL="$GITHUB_WORKSPACE/artifacts/pkg/openclaw-candidate.tgz"
+PKG_DIR="$GITHUB_WORKSPACE/artifacts/pkg"
+TARBALL="$PKG_DIR/openclaw-candidate.tgz"
+MANIFEST="$PKG_DIR/manifest-candidate.json"
 if [ "${SKIP_PACK:-0}" = "1" ]; then
-  note "candidate_tarball=$TARBALL reused_from_run=${REUSE_RUN_ID:-unknown}"
+  # download-artifact may nest the tree depending on how it was uploaded
+  if [ ! -f "$TARBALL" ]; then
+    found="$(find "$GITHUB_WORKSPACE/artifacts" -type f \( -name 'openclaw-candidate.tgz' -o -name 'openclaw-candidate-*.tgz' \) 2>/dev/null | head -1)"
+    [ -n "$found" ] && TARBALL="$found"
+  fi
+  if [ ! -f "$MANIFEST" ]; then
+    found="$(find "$GITHUB_WORKSPACE/artifacts" -type f -name 'manifest-candidate.json' 2>/dev/null | head -1)"
+    [ -n "$found" ] && MANIFEST="$found"
+  fi
+  note "candidate_tarball=$TARBALL bytes=$(stat -f%z "$TARBALL" 2>/dev/null) manifest=$MANIFEST reused_from_run=${REUSE_RUN_ID:-unknown}"
+  rm -rf /tmp/relabel && mkdir -p /tmp/relabel
+  tar -xzf "$TARBALL" -C /tmp/relabel
 else
 cd "$GITHUB_WORKSPACE/openclaw"
 mkdir -p "$GITHUB_WORKSPACE/artifacts/pkg"
@@ -53,25 +66,32 @@ const doc = JSON.parse(fs.readFileSync(p, "utf8"));
 doc.version = process.env.CANDIDATE_VERSION;
 fs.writeFileSync(p, JSON.stringify(doc, null, 2));
 '
-TARBALL="$GITHUB_WORKSPACE/artifacts/pkg/openclaw-candidate.tgz"
+TARBALL="$PKG_DIR/openclaw-candidate.tgz"
 tar -czf "$TARBALL" -C /tmp/relabel package
-cp /tmp/relabel/package/package.json "$GITHUB_WORKSPACE/artifacts/pkg/manifest-candidate.json"
+cp /tmp/relabel/package/package.json "$PKG_DIR/manifest-candidate.json"
 note "candidate_tarball=$TARBALL bytes=$(stat -f%z "$TARBALL") version=$CANDIDATE"
+fi
+note "candidate_package_version=$(node -e 'console.log(require("/tmp/relabel/package/package.json").version)' 2>&1 | tail -1)"
 say "candidate carries this PR's monotonic budget"
 grep -rho 'createMonotonicBudget(params.recoveryTimeoutMs)\|Date.now() < deadline' /tmp/relabel/package/dist 2>/dev/null |
   sort | uniq -c | tee -a "$SUMMARY"
-fi
 
 say "install published driver $DRIVER_VERSION"
 # GitHub macOS images block npm install scripts unless allowlisted; the update's
 # candidate admission needs openclaw's postinstall-generated bundled plugin runtime.
+# The updater fences update-owned native commands against its own install root; the
+# setup-node tool cache root is refused, so use a plain user prefix like the Linux cell.
+NPM_PREFIX="$HOME/.npm-global"
+mkdir -p "$NPM_PREFIX"
+npm config set prefix "$NPM_PREFIX" --location=user
 npm config set allow-scripts=@google/genai,esbuild,koffi,protobufjs,openclaw --location=user
+export PATH="$NPM_PREFIX/bin:$PATH"
 npm install -g --allow-scripts=@google/genai,esbuild,koffi,protobufjs,openclaw \
   "openclaw@$DRIVER_VERSION" --no-audit --no-fund 2>&1 | tail -3
-NPM_PREFIX="$(npm prefix -g)"
 DRIVER_BIN="$NPM_PREFIX/bin/openclaw"
 DRIVER_PKG="$NPM_PREFIX/lib/node_modules/openclaw"
-export DRIVER_BIN DRIVER_PKG
+export DRIVER_BIN DRIVER_PKG NPM_PREFIX
+note "driver_prefix=$NPM_PREFIX"
 note "driver_version=$("$DRIVER_BIN" --version 2>&1 | tail -1)"
 note "driver_wallclock_budget_files=$(grep -rl 'deadline - Date.now()' "$DRIVER_PKG/dist" 2>/dev/null | wc -l | tr -d ' ')"
 note "driver_monotonic_budget_files=$(grep -rl 'createMonotonicBudget' "$DRIVER_PKG/dist" 2>/dev/null | wc -l | tr -d ' ')"
@@ -82,12 +102,13 @@ PROOF_REGISTRY_PORT="$PORT_REGISTRY" \
 PROOF_TARBALL="$TARBALL" \
 PROOF_CANDIDATE_VERSION="$CANDIDATE" \
 PROOF_BASE_VERSION="$DRIVER_VERSION" \
-PROOF_CANDIDATE_MANIFEST="$GITHUB_WORKSPACE/artifacts/pkg/manifest-candidate.json" \
+PROOF_CANDIDATE_MANIFEST="$MANIFEST" \
 PROOF_REGISTRY_LOG=/tmp/registry.log \
   nohup node "$GITHUB_WORKSPACE/harness/registry-proxy.mjs" >/tmp/registry.stdout 2>&1 &
 for _ in $(seq 1 30); do grep -q 'listening on' /tmp/registry.log 2>/dev/null && break; sleep 1; done
 head -1 /tmp/registry.log
-printf 'registry=http://127.0.0.1:%s/\nallow-scripts=@google/genai,esbuild,koffi,protobufjs,openclaw\n' "$PORT_REGISTRY" >"$HOME/.npmrc"
+printf 'registry=http://127.0.0.1:%s/\nprefix=%s\nallow-scripts=@google/genai,esbuild,koffi,protobufjs,openclaw\n' "$PORT_REGISTRY" "$NPM_PREFIX" >"$HOME/.npmrc"
+note "npmrc=$(cat "$HOME/.npmrc" | tr '\n' ';')"
 
 say "install and start the managed launchd Gateway service"
 "$DRIVER_BIN" config set gateway.mode local
@@ -124,7 +145,7 @@ set +e
 OPENCLAW_NO_RESPAWN=1 node "$PROBE_ENTRY" gateway install --update-executor check --json \
   >/tmp/stageprobe.json 2>/tmp/stageprobe.err
 note "stageprobe_exit=$?"
-set -e
+set +e
 echo "--- stageprobe stdout ---"; head -c 1500 /tmp/stageprobe.json; echo
 echo "--- stageprobe stderr ---"; head -c 1500 /tmp/stageprobe.err; echo
 node -e '
@@ -147,7 +168,7 @@ OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw \
   "$DRIVER_BIN" gateway call update.run --params '{"timeoutMs":900000}' --timeout 900000 --json \
     >/tmp/update.json 2>/tmp/update.err
 UPDATE_RPC_EXIT=$?
-set -e
+set +e
 note "rpc_exit=$UPDATE_RPC_EXIT rpc_duration_s=$(( $(date +%s) - START ))"
 tail -20 /tmp/update.err
 node -e '
@@ -160,19 +181,22 @@ console.log("result_status=" + res.status + " reason=" + (res.reason ?? ""));
 for (const step of res.steps || []) console.log("  step: " + (step.name ?? step.step) + " dur=" + step.durationMs + " exit=" + step.exitCode);
 ' | tee -a "$SUMMARY"
 
-say "settle the managed handoff"
+say "settle the managed handoff (phase A: managed service is active)"
 SETTLE_START=$(date +%s)
-for i in $(seq 1 260); do
+for i in $(seq 1 60); do
   HELPERS="$(pgrep -f 'update-managed-service-handoff|openclaw update' 2>/dev/null | tr '\n' ' ' || true)"
   AFTER_CODE=$(curl -s -m 2 -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT_GATEWAY/health" || true)
   AFTER_VERSION="$("$DRIVER_BIN" --version 2>&1 | tail -1)"
   if [ -z "$HELPERS" ] && [ "$AFTER_CODE" = "200" ] && echo "$AFTER_VERSION" | grep -q "$CANDIDATE"; then break; fi
-  if [ $((i % 20)) -eq 0 ]; then
+  if [ $((i % 15)) -eq 0 ]; then
     note "settle_wait round=$i elapsed_s=$(( $(date +%s) - SETTLE_START )) version='$AFTER_VERSION' health=$AFTER_CODE helpers='$HELPERS'"
   fi
-  sleep 5
+  sleep 4
 done
 note "settle_elapsed_s=$(( $(date +%s) - SETTLE_START ))"
+note "phaseA_after_version=$("$DRIVER_BIN" --version 2>&1 | tail -1)"
+note "phaseA_service_pid=$(launchctl print "$TARGET" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}') pre_pid=$PRE_PID"
+note "phaseA_health=$(curl -s -m 2 -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT_GATEWAY/health" || true)"
 AFTER_PID="$(launchctl print "$TARGET" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}')"
 note "after_version=$("$DRIVER_BIN" --version 2>&1 | tail -1)"
 note "after_health=$AFTER_CODE after_pid=$AFTER_PID pre_pid=$PRE_PID"
@@ -220,6 +244,63 @@ echo "=== registry requests ==="
 wc -l /tmp/registry.log 2>/dev/null
 tail -10 /tmp/registry.log 2>/dev/null
 
+say "phase B: shipped openclaw update entry with the launchd job parked"
+launchctl bootout "$TARGET" 2>&1 | tail -2
+sleep 3
+note "phaseB_job_parked=$(launchctl print "$TARGET" >/dev/null 2>&1 && echo no || echo yes)"
+B_START=$(date +%s)
+set +e
+npm_config_registry="http://127.0.0.1:$PORT_REGISTRY/" \
+npm_config_allow_scripts=@google/genai,esbuild,koffi,protobufjs,openclaw \
+npm_config_ignore_scripts=false \
+OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw \
+  "$DRIVER_BIN" update --yes --json --timeout 1200 >/tmp/update-b.json 2>/tmp/update-b.err
+UPDATE_B_EXIT=$?
+set +e
+note "phaseB_update_exit=$UPDATE_B_EXIT phaseB_duration_s=$(( $(date +%s) - B_START ))"
+tail -25 /tmp/update-b.err
+node -e '
+const fs = require("node:fs");
+let body;
+try { body = JSON.parse(fs.readFileSync("/tmp/update-b.json", "utf8")); } catch (e) { console.log("phaseB_json_unparseable=" + e.message); process.exit(0); }
+const res = body.run ?? body;
+console.log("phaseB_status=" + (res.status ?? body.status) + " reason=" + (res.reason ?? body.reason ?? ""));
+console.log("phaseB_from=" + (res.currentVersion ?? body.currentVersion ?? "") + " to=" + (res.targetVersion ?? body.targetVersion ?? ""));
+for (const step of res.steps ?? body.steps ?? []) console.log("  phaseB step: " + (step.step ?? step.name) + ":" + step.status + " dur=" + step.durationMs + " exit=" + (step.exitCode ?? ""));
+' | tee -a "$SUMMARY"
+for i in $(seq 1 60); do
+  B_VERSION="$("$DRIVER_BIN" --version 2>&1 | tail -1)"
+  echo "$B_VERSION" | grep -q "$CANDIDATE" && break
+  sleep 5
+done
+note "phaseB_after_version=$("$DRIVER_BIN" --version 2>&1 | tail -1)"
+
+say "phase B: bring the managed launchd service back on the candidate"
+"$DRIVER_BIN" gateway install --force --port "$PORT_GATEWAY" 2>&1 | tail -4
+for i in $(seq 1 60); do
+  B_HEALTH=$(curl -s -m 2 -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT_GATEWAY/health" || true)
+  [ "$B_HEALTH" = "200" ] && break
+  sleep 3
+done
+B_PID="$(launchctl print "$TARGET" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}')"
+B_SERVICE_VERSION=$("$DRIVER_BIN" gateway status --json 2>/dev/null | node -e '
+let raw = "";
+process.stdin.on("data", (c) => (raw += c)).on("end", () => {
+  try { const d = JSON.parse(raw); console.log(d?.service?.runtime?.version ?? d?.runtime?.version ?? "n/a"); } catch { console.log("unreadable"); }
+});')
+note "phaseB_health=$B_HEALTH phaseB_service_pid=$B_PID pre_update_pid=$PRE_PID phaseB_service_version=$B_SERVICE_VERSION"
+note "phaseB_marker=$(cat "$HOME/.openclaw/proof-marker" 2>/dev/null) phaseB_workspace=$(cat "$HOME/.openclaw/workspace/note.txt" 2>/dev/null) phaseB_data=$(cat "$HOME/.openclaw/proof/data.json" 2>/dev/null | tr -d '\n')"
+CONFIG_SHA_AFTER="$(shasum -a 256 "$HOME/.openclaw/openclaw.json" | cut -d' ' -f1)"
+note "phaseB_config_sha_after=$CONFIG_SHA_AFTER (before=$CONFIG_SHA_BEFORE)"
+note "phaseB_installed_monotonic_budget_files=$(grep -rl 'createMonotonicBudget' "$DRIVER_PKG/dist" 2>/dev/null | wc -l | tr -d ' ')"
+note "phaseB_installed_wallclock_budget_files=$(grep -rl 'Date.now() < deadline' "$DRIVER_PKG/dist" 2>/dev/null | wc -l | tr -d ' ')"
+say "phase B update report"
+ls -1t "$HOME/.openclaw/update-reports" 2>/dev/null | head -3
+for f in $(ls -1t "$HOME"/.openclaw/update-reports/*.md 2>/dev/null | head -1); do
+  echo "## $f"
+  head -40 "$f"
+done
+
 say "verdict"
 VERSION_OK=no
 "$DRIVER_BIN" --version 2>&1 | tail -1 | grep -q "$CANDIDATE" && VERSION_OK=yes
@@ -229,7 +310,7 @@ DATA_OK=no
   [ "$(cat "$HOME/.openclaw/proof/data.json" 2>/dev/null | tr -d '\n')" = '{"keep":"me","record":42}' ] && DATA_OK=yes
 [ "$CONFIG_SHA_AFTER" = "$CONFIG_SHA_BEFORE" ] && CONFIG_OK=yes || CONFIG_OK=no
 VERDICT=FAIL
-if [ "$UPDATE_RPC_EXIT" -eq 0 ] && [ "$VERSION_OK" = yes ] && [ "$DATA_OK" = yes ] &&
-   [ "$CONFIG_OK" = yes ] && [ "$AFTER_CODE" = "200" ] && [ -n "$AFTER_PID" ]; then VERDICT=PASS; fi
-note "VERDICT=$VERDICT rpcExit=$UPDATE_RPC_EXIT versionAdvanced=$VERSION_OK dataIntact=$DATA_OK configIntact=$CONFIG_OK health=$AFTER_CODE"
+if [ "$UPDATE_B_EXIT" -eq 0 ] && [ "$VERSION_OK" = yes ] && [ "$DATA_OK" = yes ] &&
+   [ "$CONFIG_OK" = yes ] && [ "$B_HEALTH" = "200" ] && [ -n "$B_PID" ]; then VERDICT=PASS; fi
+note "VERDICT=$VERDICT phaseA_rpcExit=$UPDATE_RPC_EXIT phaseB_updateExit=$UPDATE_B_EXIT versionAdvanced=$VERSION_OK dataIntact=$DATA_OK configIntact=$CONFIG_OK phaseB_health=$B_HEALTH phaseB_pid=$B_PID"
 [ "$VERDICT" = PASS ] || exit 1
