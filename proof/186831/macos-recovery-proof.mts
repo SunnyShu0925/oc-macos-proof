@@ -273,7 +273,13 @@ writeFileSync(preloadFile, preload);
 const helperArgs = ["--import=" + preloadFile, harnessFile];
 console.error("[run] launching helper mode=" + mode + " recoveryTimeoutMs=" + recoveryTimeoutMs + " stepFwd=" + clockStepForwardMs);
 const r = spawnSync(process.execPath, helperArgs, {
-  env: { ...process.env, HARNESS_PARAMS: JSON.stringify(params), STEP_FORWARD_MS: String(clockStepForwardMs) },
+  env: {
+    ...process.env,
+    HARNESS_PARAMS: JSON.stringify(params),
+    STEP_FORWARD_MS: String(clockStepForwardMs),
+    PROOF_MARKER: join(dir, "marker"),
+    PROOF_KICKED: join(dir, "kicked"),
+  },
   encoding: "utf8",
   timeout: Math.max(120000, recoveryTimeoutMs * 4),
 });
