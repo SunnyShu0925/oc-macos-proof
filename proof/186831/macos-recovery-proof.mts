@@ -155,9 +155,10 @@ const harnessFile = join(dir, "harness.mjs");
 // realpath-normalize so ownsManagedUpdateLease()'s fs.realpathSync comparison
 // holds: macOS $TMPDIR (/var/folders/...) symlinks to /private/var/folders/...,
 // so a raw path would NOT equal its own realpath -> recovery would refuse.
-const leaseKey = realpathSync(join(dir, "lease-key"));
 const plistPath = join(homedir(), "Library/LaunchAgents/com.openclaw.proofrecovery.plist");
-writeFileSync(leaseKey, "x");
+// leaseKey must exist before realpath; write it now (before harness uses it)
+writeFileSync(join(dir, "lease-key"), "x");
+const leaseKey = realpathSync(join(dir, "lease-key"));
 
 // Real launchd job plist: /bin/sleep 300 (long-lived, gives us a real live PID).
 mkdirSync(join(homedir(), "Library/LaunchAgents"), { recursive: true });
