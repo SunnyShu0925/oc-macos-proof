@@ -27,7 +27,7 @@
  *     fresh PID is observed, so the loop is truncated -> restored=false.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -152,7 +152,10 @@ let script = buildStandalone();
 
 const dir = mkdtempSync(join(tmpdir(), "oc-recovery-mac-"));
 const harnessFile = join(dir, "harness.mjs");
-const leaseKey = join(dir, "lease-key");
+// realpath-normalize so ownsManagedUpdateLease()'s fs.realpathSync comparison
+// holds: macOS $TMPDIR (/var/folders/...) symlinks to /private/var/folders/...,
+// so a raw path would NOT equal its own realpath -> recovery would refuse.
+const leaseKey = realpathSync(join(dir, "lease-key"));
 const plistPath = join(homedir(), "Library/LaunchAgents/com.openclaw.proofrecovery.plist");
 writeFileSync(leaseKey, "x");
 
