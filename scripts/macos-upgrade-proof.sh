@@ -275,31 +275,93 @@ for i in $(seq 1 60); do
 done
 note "phaseB_after_version=$("$DRIVER_BIN" --version 2>&1 | tail -1)"
 
-say "phase B: bring the managed launchd service back on the candidate"
-"$DRIVER_BIN" gateway install --force --port "$PORT_GATEWAY" 2>&1 | tail -4
-for i in $(seq 1 60); do
-  B_HEALTH=$(curl -s -m 2 -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT_GATEWAY/health" || true)
-  [ "$B_HEALTH" = "200" ] && break
-  sleep 3
-done
-B_PID="$(launchctl print "$TARGET" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}')"
-B_SERVICE_VERSION=$("$DRIVER_BIN" gateway status --json 2>/dev/null | node -e '
+collect_service_evidence() {
+  local arm="$1"
+  "$DRIVER_BIN" gateway install --force --port "$PORT_GATEWAY" 2>&1 | tail -4
+  local code="" pid="" svc=""
+  for _ in $(seq 1 60); do
+    code=$(curl -s -m 2 -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT_GATEWAY/health" || true)
+    [ "$code" = "200" ] && break
+    sleep 3
+  done
+  pid="$(launchctl print "$TARGET" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}')"
+  svc=$("$DRIVER_BIN" gateway status --json 2>/dev/null | node -e '
 let raw = "";
 process.stdin.on("data", (c) => (raw += c)).on("end", () => {
   try { const d = JSON.parse(raw); console.log(d?.service?.runtime?.version ?? d?.runtime?.version ?? "n/a"); } catch { console.log("unreadable"); }
 });')
-note "phaseB_health=$B_HEALTH phaseB_service_pid=$B_PID pre_update_pid=$PRE_PID phaseB_service_version=$B_SERVICE_VERSION"
-note "phaseB_marker=$(cat "$HOME/.openclaw/proof-marker" 2>/dev/null) phaseB_workspace=$(cat "$HOME/.openclaw/workspace/note.txt" 2>/dev/null) phaseB_data=$(cat "$HOME/.openclaw/proof/data.json" 2>/dev/null | tr -d '\n')"
-CONFIG_SHA_AFTER="$(shasum -a 256 "$HOME/.openclaw/openclaw.json" | cut -d' ' -f1)"
-note "phaseB_config_sha_after=$CONFIG_SHA_AFTER (before=$CONFIG_SHA_BEFORE)"
-note "phaseB_installed_monotonic_budget_files=$(grep -rl 'createMonotonicBudget' "$DRIVER_PKG/dist" 2>/dev/null | wc -l | tr -d ' ')"
-note "phaseB_installed_wallclock_budget_files=$(grep -rl 'Date.now() < deadline' "$DRIVER_PKG/dist" 2>/dev/null | wc -l | tr -d ' ')"
+  note "${arm}_health=$code ${arm}_service_pid=$pid pre_update_pid=$PRE_PID ${arm}_service_version=$svc"
+  note "${arm}_marker=$(cat "$HOME/.openclaw/proof-marker" 2>/dev/null) ${arm}_workspace=$(cat "$HOME/.openclaw/workspace/note.txt" 2>/dev/null) ${arm}_data=$(cat "$HOME/.openclaw/proof/data.json" 2>/dev/null | tr -d '\n')"
+  note "${arm}_installed_monotonic_budget_files=$(grep -rl 'createMonotonicBudget' "$DRIVER_PKG/dist" 2>/dev/null | wc -l | tr -d ' ')"
+  note "${arm}_installed_wallclock_budget_files=$(grep -rl 'Date.now() < deadline' "$DRIVER_PKG/dist" 2>/dev/null | wc -l | tr -d ' ')"
+  CONFIG_SHA_FINAL="$(shasum -a 256 "$HOME/.openclaw/openclaw.json" | cut -d' ' -f1)"
+  note "${arm}_config_sha_after=$CONFIG_SHA_FINAL (before=$CONFIG_SHA_BEFORE)"
+  ARM_HEALTH="$code"
+  ARM_PID="$pid"
+}
+
+say "phase B: bring the managed launchd service back on the candidate"
+collect_service_evidence phaseB
 say "phase B update report"
-ls -1t "$HOME/.openclaw/update-reports" 2>/dev/null | head -3
 for f in $(ls -1t "$HOME"/.openclaw/update-reports/*.md 2>/dev/null | head -1); do
   echo "## $f"
-  head -40 "$f"
+  head -30 "$f"
 done
+
+say "phase C: shipped update entry with the managed service uninstalled"
+"$DRIVER_BIN" gateway uninstall --json 2>&1 | tail -3
+launchctl bootout "$TARGET" 2>&1 | tail -2
+note "phaseC_job_present=$(launchctl print "$TARGET" >/dev/null 2>&1 && echo yes || echo no)"
+note "phaseC_launchagents=$(ls "$HOME"/Library/LaunchAgents 2>/dev/null | tr '\n' ' ')"
+C_START=$(date +%s)
+npm_config_registry="http://127.0.0.1:$PORT_REGISTRY/" \
+npm_config_allow_scripts=@google/genai,esbuild,koffi,protobufjs,openclaw \
+npm_config_ignore_scripts=false \
+OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw \
+  "$DRIVER_BIN" update --yes --json --timeout 1200 >/tmp/update-c.json 2>/tmp/update-c.err
+UPDATE_C_EXIT=$?
+note "phaseC_update_exit=$UPDATE_C_EXIT phaseC_duration_s=$(( $(date +%s) - C_START ))"
+tail -25 /tmp/update-c.err
+node -e '
+const fs = require("node:fs");
+let body;
+try { body = JSON.parse(fs.readFileSync("/tmp/update-c.json", "utf8")); } catch (e) { console.log("phaseC_json_unparseable=" + e.message); process.exit(0); }
+const res = body.run ?? body;
+console.log("phaseC_status=" + (res.status ?? body.status) + " reason=" + (res.reason ?? body.reason ?? ""));
+console.log("phaseC_from=" + (res.currentVersion ?? body.currentVersion ?? "") + " to=" + (res.targetVersion ?? body.targetVersion ?? ""));
+for (const step of res.steps ?? body.steps ?? []) console.log("  phaseC step: " + (step.step ?? step.name) + ":" + step.status + " dur=" + step.durationMs + " exit=" + (step.exitCode ?? ""));
+' | tee -a "$SUMMARY"
+for i in $(seq 1 60); do
+  C_VERSION="$("$DRIVER_BIN" --version 2>&1 | tail -1)"
+  echo "$C_VERSION" | grep -q "$CANDIDATE" && break
+  sleep 5
+done
+note "phaseC_after_version=$("$DRIVER_BIN" --version 2>&1 | tail -1)"
+say "phase C: bring the managed launchd service back on the candidate"
+collect_service_evidence phaseC
+say "phase C update report"
+for f in $(ls -1t "$HOME"/.openclaw/update-reports/*.md 2>/dev/null | head -1); do
+  echo "## $f"
+  head -30 "$f"
+done
+
+say "fence postmortem: executor check straight from each staged install root"
+for stage in "$NPM_PREFIX"/lib/node_modules/.openclaw.update-stage-*/lib/node_modules/openclaw; do
+  [ -d "$stage" ] || continue
+  echo "## stage=$stage"
+  ( cd "$stage" && OPENCLAW_NO_RESPAWN=1 npm_config_registry="http://127.0.0.1:$PORT_REGISTRY/" \
+      node dist/entry.js gateway install --update-executor check --json ) \
+    >/tmp/stagecheck.json 2>/tmp/stagecheck.err
+  note "stagecheck_exit=$? stagecheck_stdout=$(head -c 600 /tmp/stagecheck.json)"
+  note "stagecheck_stderr=$(head -c 600 /tmp/stagecheck.err | tr '\n' ';')"
+done
+ls -1d "$NPM_PREFIX"/lib/node_modules/.openclaw.update-stage-* "$NPM_PREFIX"/lib/openclaw-update-runtime-* 2>/dev/null | tee -a "$SUMMARY"
+say "update failure diagnostics"
+while IFS= read -r f; do
+  echo "## $f"
+  head -c 2500 "$f"
+  echo
+done < <(ls -1t "$HOME"/.openclaw/logs/support/openclaw-update-failure-*.json 2>/dev/null | head -3)
 
 say "verdict"
 VERSION_OK=no
@@ -308,9 +370,12 @@ DATA_OK=no
 [ "$(cat "$HOME/.openclaw/proof-marker" 2>/dev/null)" = "MARKER-macos-186831" ] &&
   [ "$(cat "$HOME/.openclaw/workspace/note.txt" 2>/dev/null)" = "workspace-macos-186831" ] &&
   [ "$(cat "$HOME/.openclaw/proof/data.json" 2>/dev/null | tr -d '\n')" = '{"keep":"me","record":42}' ] && DATA_OK=yes
-[ "$CONFIG_SHA_AFTER" = "$CONFIG_SHA_BEFORE" ] && CONFIG_OK=yes || CONFIG_OK=no
+[ "$CONFIG_SHA_FINAL" = "$CONFIG_SHA_BEFORE" ] && CONFIG_OK=yes || CONFIG_OK=no
+UPGRADE_ARM=none
+[ "${UPDATE_C_EXIT:-1}" -eq 0 ] && UPGRADE_ARM=phaseC
+[ "${UPDATE_B_EXIT:-1}" -eq 0 ] && UPGRADE_ARM=phaseB
 VERDICT=FAIL
-if [ "$UPDATE_B_EXIT" -eq 0 ] && [ "$VERSION_OK" = yes ] && [ "$DATA_OK" = yes ] &&
-   [ "$CONFIG_OK" = yes ] && [ "$B_HEALTH" = "200" ] && [ -n "$B_PID" ]; then VERDICT=PASS; fi
-note "VERDICT=$VERDICT phaseA_rpcExit=$UPDATE_RPC_EXIT phaseB_updateExit=$UPDATE_B_EXIT versionAdvanced=$VERSION_OK dataIntact=$DATA_OK configIntact=$CONFIG_OK phaseB_health=$B_HEALTH phaseB_pid=$B_PID"
+if [ "$UPGRADE_ARM" != none ] && [ "$VERSION_OK" = yes ] && [ "$DATA_OK" = yes ] &&
+   [ "$CONFIG_OK" = yes ] && [ "$ARM_HEALTH" = "200" ] && [ -n "$ARM_PID" ]; then VERDICT=PASS; fi
+note "VERDICT=$VERDICT upgradeArm=$UPGRADE_ARM phaseA_rpcExit=$UPDATE_RPC_EXIT phaseB_updateExit=$UPDATE_B_EXIT phaseC_updateExit=$UPDATE_C_EXIT versionAdvanced=$VERSION_OK dataIntact=$DATA_OK configIntact=$CONFIG_OK ${UPGRADE_ARM}_health=$ARM_HEALTH ${UPGRADE_ARM}_pid=$ARM_PID"
 [ "$VERDICT" = PASS ] || exit 1
