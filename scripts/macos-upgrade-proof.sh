@@ -63,7 +63,11 @@ grep -rho 'createMonotonicBudget(params.recoveryTimeoutMs)\|Date.now() < deadlin
 fi
 
 say "install published driver $DRIVER_VERSION"
-npm install -g "openclaw@$DRIVER_VERSION" --no-audit --no-fund 2>&1 | tail -3
+# GitHub macOS images block npm install scripts unless allowlisted; the update's
+# candidate admission needs openclaw's postinstall-generated bundled plugin runtime.
+npm config set allow-scripts=@google/genai,esbuild,koffi,protobufjs,openclaw --location=user
+npm install -g --allow-scripts=@google/genai,esbuild,koffi,protobufjs,openclaw \
+  "openclaw@$DRIVER_VERSION" --no-audit --no-fund 2>&1 | tail -3
 NPM_PREFIX="$(npm prefix -g)"
 DRIVER_BIN="$NPM_PREFIX/bin/openclaw"
 DRIVER_PKG="$NPM_PREFIX/lib/node_modules/openclaw"
@@ -83,7 +87,7 @@ PROOF_REGISTRY_LOG=/tmp/registry.log \
   nohup node "$GITHUB_WORKSPACE/harness/registry-proxy.mjs" >/tmp/registry.stdout 2>&1 &
 for _ in $(seq 1 30); do grep -q 'listening on' /tmp/registry.log 2>/dev/null && break; sleep 1; done
 head -1 /tmp/registry.log
-printf 'registry=http://127.0.0.1:%s/\n' "$PORT_REGISTRY" >"$HOME/.npmrc"
+printf 'registry=http://127.0.0.1:%s/\nallow-scripts=@google/genai,esbuild,koffi,protobufjs,openclaw\n' "$PORT_REGISTRY" >"$HOME/.npmrc"
 
 say "install and start the managed launchd Gateway service"
 "$DRIVER_BIN" config set gateway.mode local
@@ -116,6 +120,8 @@ find "$HOME/.openclaw/tmp" -maxdepth 2 -name '*handoff*' -exec rm -rf {} + 2>/de
 START=$(date +%s)
 set +e
 npm_config_registry="http://127.0.0.1:$PORT_REGISTRY/" \
+npm_config_allow_scripts=@google/genai,esbuild,koffi,protobufjs,openclaw \
+npm_config_ignore_scripts=false \
 OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw \
   "$DRIVER_BIN" gateway call update.run --params '{"timeoutMs":900000}' --timeout 900000 --json \
     >/tmp/update.json 2>/tmp/update.err
@@ -179,11 +185,16 @@ for f in "$HOME"/.openclaw/update-reports/*; do
   tail -40 "$f"
 done
 say "gateway service log tail"
-for f in "$HOME"/.openclaw/logs/*; do
-  [ -f "$f" ] || continue
+while IFS= read -r f; do
   echo "## $f"
   tail -30 "$f"
-done
+done < <(find "$HOME/.openclaw/logs" -maxdepth 3 -type f 2>/dev/null | head -20)
+say "update failure diagnostics"
+while IFS= read -r f; do
+  echo "## $f"
+  head -c 4000 "$f"
+  echo
+done < <(find "$HOME/.openclaw/logs/support" -maxdepth 1 -name 'openclaw-update-failure-*.json' 2>/dev/null | head -4)
 echo "=== registry requests ==="
 wc -l /tmp/registry.log 2>/dev/null
 tail -10 /tmp/registry.log 2>/dev/null
