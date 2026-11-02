@@ -15,6 +15,14 @@ on:
         description: Version pinned on the candidate build (must exceed the driver)
         required: true
         default: "2026.10.10"
+      candidate_source:
+        description: packed = serve the head build from a loopback registry; npm = upgrade to the published successor release
+        required: true
+        default: npm
+        type: choice
+        options:
+          - npm
+          - packed
       reuse_run_id:
         description: optional - reuse the packaged candidate from this earlier run (skips install/build/pack)
         required: false
@@ -41,7 +49,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Checkout openclaw PR branch (fork)
-        if: inputs.reuse_run_id == ''
+        if: inputs.reuse_run_id == '' && inputs.candidate_source == 'packed'
         uses: actions/checkout@v4
         with:
           repository: SunnyShu0925/openclaw
@@ -60,14 +68,14 @@ jobs:
           node-version: 24.22.1
 
       - name: Install deps (pnpm)
-        if: inputs.reuse_run_id == ''
+        if: inputs.reuse_run_id == '' && inputs.candidate_source == 'packed'
         working-directory: openclaw
         run: |
           corepack enable
           pnpm install --frozen-lockfile
 
       - name: Pin the build version before compiling
-        if: inputs.reuse_run_id == ''
+        if: inputs.reuse_run_id == '' && inputs.candidate_source == 'packed'
         working-directory: openclaw
         env:
           PACKAGE_VERSION: ${{ inputs.candidate_version }}
@@ -81,7 +89,7 @@ jobs:
           '
 
       - name: Build dist from the reviewed head (package profile)
-        if: inputs.reuse_run_id == ''
+        if: inputs.reuse_run_id == '' && inputs.candidate_source == 'packed'
         working-directory: openclaw
         # The package profile keeps the canonical dts that
         # package-openclaw-for-docker --skip-build requires.
@@ -89,7 +97,7 @@ jobs:
         continue-on-error: true
 
       - name: Assert the built dist carries the monotonic budget
-        if: inputs.reuse_run_id == ''
+        if: inputs.reuse_run_id == '' && inputs.candidate_source == 'packed'
         working-directory: openclaw
         run: |
           ls -l dist/entry.js
@@ -103,6 +111,7 @@ jobs:
           CANDIDATE_VERSION: ${{ inputs.candidate_version }}
           SKIP_PACK: ${{ inputs.reuse_run_id != '' && '1' || '0' }}
           REUSE_RUN_ID: ${{ inputs.reuse_run_id }}
+          CANDIDATE_SOURCE: ${{ inputs.candidate_source }}
         run: bash "$GITHUB_WORKSPACE/scripts/macos-upgrade-proof.sh"
 
       - name: Keep the packaged candidate for retries

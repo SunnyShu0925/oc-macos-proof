@@ -6,6 +6,10 @@ set -uo pipefail
 
 DRIVER_VERSION="${DRIVER_VERSION:-2026.10.9}"
 CANDIDATE="${CANDIDATE_VERSION:-2026.10.10}"
+# packed = serve the reviewed head build from a loopback registry
+# npm      = upgrade to the published successor release from registry.npmjs.org
+CANDIDATE_SOURCE="${CANDIDATE_SOURCE:-packed}"
+TARGET_SPEC="${TARGET_SPEC:-openclaw@beta}"
 PORT_GATEWAY="${PORT_GATEWAY:-19031}"
 PORT_REGISTRY="${PORT_REGISTRY:-48741}"
 SUMMARY=/tmp/macos-proof-summary.txt
@@ -35,6 +39,7 @@ say "environment"
   git -C "$GITHUB_WORKSPACE/openclaw" log -1 --format='%H %s'
 } 2>&1 | tee -a "$SUMMARY"
 
+if [ "$CANDIDATE_SOURCE" = "packed" ]; then
 say "pack reviewed candidate $CANDIDATE (canonical packer, version pinned before build)"
 PKG_DIR="$GITHUB_WORKSPACE/artifacts/pkg"
 TARBALL="$PKG_DIR/openclaw-candidate.tgz"
@@ -102,6 +107,15 @@ note "candidate_package_version=$(node -e 'console.log(require("/tmp/relabel/pac
 say "candidate carries this PR's monotonic budget"
 grep -rho 'createMonotonicBudget(params.recoveryTimeoutMs)\|Date.now() < deadline' /tmp/relabel/package/dist 2>/dev/null |
   sort | uniq -c | tee -a "$SUMMARY"
+NPM_REGISTRY_URL="http://127.0.0.1:$PORT_REGISTRY/"
+TARGET_SPEC=openclaw
+else
+say "resolve the published successor release as the upgrade target"
+CANDIDATE="$(npm view "$TARGET_SPEC" version 2>/dev/null | tail -1)"
+[ -n "$CANDIDATE" ] || { echo "candidate_resolution_failed spec=$TARGET_SPEC"; exit 1; }
+note "target_spec=$TARGET_SPEC resolved_candidate=$CANDIDATE registry=public"
+NPM_REGISTRY_URL="https://registry.npmjs.org/"
+fi
 
 say "install published driver $DRIVER_VERSION"
 # GitHub macOS images block npm install scripts unless allowlisted; the update's
@@ -123,6 +137,7 @@ note "driver_version=$("$DRIVER_BIN" --version 2>&1 | tail -1)"
 note "driver_wallclock_budget_files=$(grep -rl 'deadline - Date.now()' "$DRIVER_PKG/dist" 2>/dev/null | wc -l | tr -d ' ')"
 note "driver_monotonic_budget_files=$(grep -rl 'createMonotonicBudget' "$DRIVER_PKG/dist" 2>/dev/null | wc -l | tr -d ' ')"
 
+if [ "$CANDIDATE_SOURCE" = "packed" ]; then
 say "start loopback registry serving the candidate"
 rm -f /tmp/registry.log
 PROOF_REGISTRY_PORT="$PORT_REGISTRY" \
@@ -134,7 +149,8 @@ PROOF_REGISTRY_LOG=/tmp/registry.log \
   nohup node "$GITHUB_WORKSPACE/harness/registry-proxy.mjs" >/tmp/registry.stdout 2>&1 &
 for _ in $(seq 1 30); do grep -q 'listening on' /tmp/registry.log 2>/dev/null && break; sleep 1; done
 head -1 /tmp/registry.log
-printf 'registry=http://127.0.0.1:%s/\nprefix=%s\nallow-scripts=@google/genai,esbuild,koffi,protobufjs,openclaw\n' "$PORT_REGISTRY" "$NPM_PREFIX" >"$HOME/.npmrc"
+fi
+printf 'registry=%s\nprefix=%s\nallow-scripts=@google/genai,esbuild,koffi,protobufjs,openclaw\n' "$NPM_REGISTRY_URL" "$NPM_PREFIX" >"$HOME/.npmrc"
 note "npmrc=$(cat "$HOME/.npmrc" | tr '\n' ';')"
 
 say "install and start the managed launchd Gateway service"
@@ -188,10 +204,10 @@ rm -rf /tmp/openclaw-update-run-handoff-* "${TMPDIR:-/tmp}/openclaw-update-run-h
 find "$HOME/.openclaw/tmp" -maxdepth 2 -name '*handoff*' -exec rm -rf {} + 2>/dev/null
 START=$(date +%s)
 set +e
-npm_config_registry="http://127.0.0.1:$PORT_REGISTRY/" \
+npm_config_registry="$NPM_REGISTRY_URL" \
 npm_config_allow_scripts=@google/genai,esbuild,koffi,protobufjs,openclaw \
 npm_config_ignore_scripts=false \
-OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw \
+OPENCLAW_UPDATE_PACKAGE_SPEC="$TARGET_SPEC" \
   "$DRIVER_BIN" gateway call update.run --params '{"timeoutMs":900000}' --timeout 900000 --json \
     >/tmp/update.json 2>/tmp/update.err
 UPDATE_RPC_EXIT=$?
@@ -277,10 +293,10 @@ sleep 3
 note "phaseB_job_parked=$(launchctl print "$TARGET" >/dev/null 2>&1 && echo no || echo yes)"
 B_START=$(date +%s)
 set +e
-npm_config_registry="http://127.0.0.1:$PORT_REGISTRY/" \
+npm_config_registry="$NPM_REGISTRY_URL" \
 npm_config_allow_scripts=@google/genai,esbuild,koffi,protobufjs,openclaw \
 npm_config_ignore_scripts=false \
-OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw \
+OPENCLAW_UPDATE_PACKAGE_SPEC="$TARGET_SPEC" \
   "$DRIVER_BIN" update --yes --json --timeout 1200 >/tmp/update-b.json 2>/tmp/update-b.err
 UPDATE_B_EXIT=$?
 set +e
@@ -341,10 +357,10 @@ launchctl bootout "$TARGET" 2>&1 | tail -2
 note "phaseC_job_present=$(launchctl print "$TARGET" >/dev/null 2>&1 && echo yes || echo no)"
 note "phaseC_launchagents=$(ls "$HOME"/Library/LaunchAgents 2>/dev/null | tr '\n' ' ')"
 C_START=$(date +%s)
-npm_config_registry="http://127.0.0.1:$PORT_REGISTRY/" \
+npm_config_registry="$NPM_REGISTRY_URL" \
 npm_config_allow_scripts=@google/genai,esbuild,koffi,protobufjs,openclaw \
 npm_config_ignore_scripts=false \
-OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw \
+OPENCLAW_UPDATE_PACKAGE_SPEC="$TARGET_SPEC" \
   "$DRIVER_BIN" update --yes --json --timeout 1200 >/tmp/update-c.json 2>/tmp/update-c.err
 UPDATE_C_EXIT=$?
 note "phaseC_update_exit=$UPDATE_C_EXIT phaseC_duration_s=$(( $(date +%s) - C_START ))"
@@ -376,7 +392,7 @@ say "fence postmortem: executor check straight from each staged install root"
 for stage in "$NPM_PREFIX"/lib/node_modules/.openclaw.update-stage-*/lib/node_modules/openclaw; do
   [ -d "$stage" ] || continue
   echo "## stage=$stage"
-  ( cd "$stage" && OPENCLAW_NO_RESPAWN=1 npm_config_registry="http://127.0.0.1:$PORT_REGISTRY/" \
+  ( cd "$stage" && OPENCLAW_NO_RESPAWN=1 npm_config_registry="$NPM_REGISTRY_URL" \
       node dist/entry.js gateway install --update-executor check --json ) \
     >/tmp/stagecheck.json 2>/tmp/stagecheck.err
   note "stagecheck_exit=$? stagecheck_stdout=$(head -c 600 /tmp/stagecheck.json)"
@@ -384,10 +400,12 @@ for stage in "$NPM_PREFIX"/lib/node_modules/.openclaw.update-stage-*/lib/node_mo
 done
 ls -1d "$NPM_PREFIX"/lib/node_modules/.openclaw.update-stage-* "$NPM_PREFIX"/lib/openclaw-update-runtime-* 2>/dev/null | tee -a "$SUMMARY"
 
+[ "$CANDIDATE_SOURCE" = "packed" ] || note "phaseD_skipped source=$CANDIDATE_SOURCE"
+if [ "$CANDIDATE_SOURCE" = "packed" ]; then
 say "phase D: reproduce the updater's staged candidate install and inspect its tree"
 STAGE="$NPM_PREFIX/lib/node_modules/.openclaw.update-stage-manual"
 rm -rf "$STAGE" && mkdir -p "$STAGE"
-npm_config_registry="http://127.0.0.1:$PORT_REGISTRY/" \
+npm_config_registry="$NPM_REGISTRY_URL" \
   npm i -g --allow-scripts=@google/genai,esbuild,koffi,protobufjs,openclaw --prefix "$STAGE" "openclaw@$CANDIDATE" \
   --no-fund --no-audit --loglevel=error --min-release-age=0 >/tmp/stage-d.npm 2>&1
 note "stageD_npm_exit=$? npm_tail=$(tail -4 /tmp/stage-d.npm | tr '\n' ';')"
@@ -401,6 +419,7 @@ for root in "$STAGE/lib/node_modules/openclaw" "$STAGE/node_modules/openclaw"; d
     >/tmp/doctor-d.json 2>/tmp/doctor-d.err
   note "stageD_doctor_exit=$? doctor_err=$(tail -c 500 /tmp/doctor-d.err | tr '\n' ';')"
 done
+fi
 
 say "update failure diagnostics"
 while IFS= read -r f; do
