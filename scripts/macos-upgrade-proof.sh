@@ -45,11 +45,12 @@ PKG_DIR="$GITHUB_WORKSPACE/artifacts/pkg"
 TARBALL="$PKG_DIR/openclaw-candidate.tgz"
 MANIFEST="$PKG_DIR/manifest-candidate.json"
 if [ "${SKIP_PACK:-0}" = "1" ]; then
-  # download-artifact may nest the tree depending on how it was uploaded
-  if [ ! -f "$TARBALL" ]; then
-    found="$(find "$GITHUB_WORKSPACE/artifacts" -type f \( -name 'openclaw-candidate.tgz' -o -name 'openclaw-candidate-*.tgz' \) 2>/dev/null | head -1)"
-    [ -n "$found" ] && TARBALL="$found"
-  fi
+  # download-artifact may nest the tree, and the non-reuse run uploads the packer's
+  # own name (openclaw-head.tgz), not the staged candidate name.
+  for pattern in 'openclaw-candidate.tgz' 'openclaw-candidate-*.tgz' 'openclaw-head.tgz' '*.tgz'; do
+    found="$(find "$GITHUB_WORKSPACE/artifacts" -type f -name "$pattern" 2>/dev/null | head -1)"
+    [ -n "$found" ] && TARBALL="$found" && break
+  done
   if [ ! -f "$MANIFEST" ]; then
     found="$(find "$GITHUB_WORKSPACE/artifacts" -type f -name 'manifest-candidate.json' 2>/dev/null | head -1)"
     [ -n "$found" ] && MANIFEST="$found"
@@ -57,6 +58,7 @@ if [ "${SKIP_PACK:-0}" = "1" ]; then
   note "candidate_tarball=$TARBALL bytes=$(stat -f%z "$TARBALL" 2>/dev/null) manifest=$MANIFEST reused_from_run=${REUSE_RUN_ID:-unknown}"
   rm -rf /tmp/relabel && mkdir -p /tmp/relabel
   tar -xzf "$TARBALL" -C /tmp/relabel
+  note "reused_package_json=$(node -e 'const d=require("/tmp/relabel/package/package.json");console.log("version="+d.version,"bundled="+JSON.stringify(d.bundleDependencies||[]))' 2>&1 | tail -1)"
 else
 cd "$GITHUB_WORKSPACE/openclaw"
 mkdir -p "$GITHUB_WORKSPACE/artifacts/pkg"
@@ -100,6 +102,8 @@ console.log("candidate_manifest_version=" + doc.version + " typebox=" + (doc.dep
 ' | tee -a "$SUMMARY"
 STAGED_TARBALL="/tmp/openclaw-candidate-$CANDIDATE.tgz"
 tar -czf "$STAGED_TARBALL" -C /tmp/relabel package
+[ -n "$MANIFEST" ] || MANIFEST="$PKG_DIR/manifest-candidate.json"
+mkdir -p "$(dirname "$MANIFEST")"
 cp /tmp/relabel/package/package.json "$MANIFEST"
 TARBALL="$STAGED_TARBALL"
 note "served_candidate_tarball=$TARBALL bytes=$(stat -f%z "$TARBALL") manifest=$MANIFEST"
