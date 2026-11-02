@@ -176,6 +176,19 @@ echo "workspace-macos-186831" >"$HOME/.openclaw/workspace/note.txt"
 printf '{"keep":"me","record":42}\n' >"$HOME/.openclaw/proof/data.json"
 CONFIG_SHA_BEFORE="$(shasum -a 256 "$HOME/.openclaw/openclaw.json" | cut -d' ' -f1)"
 note "config_sha_before=$CONFIG_SHA_BEFORE"
+# The updater's post-activation doctor legitimately rewrites openclaw.json, so the
+# gate is the operator settings the service keeps using, not the file's bytes.
+settings_fingerprint() {
+  node -e '
+const crypto = require("node:crypto");
+const d = require(process.argv[1]);
+const g = d?.gateway ?? {};
+const token = typeof g?.auth?.token === "string" ? crypto.createHash("sha256").update(g.auth.token).digest("hex").slice(0, 12) : "none";
+console.log(`mode=${g.mode} port=${g.port} token_sha256_12=${token}`);
+' "$1" 2>&1 | tail -1
+}
+SETTINGS_BEFORE="$(settings_fingerprint "$HOME/.openclaw/openclaw.json")"
+note "settings_before=$SETTINGS_BEFORE config_keys_before=$(node -e 'const d=require(process.argv[1]);console.log(Object.keys(d).sort().join(","))' "$HOME/.openclaw/openclaw.json" 2>&1 | tail -1)"
 say "state dir before update"
 ls -la "$HOME/.openclaw" 2>/dev/null | tail -n +2 | awk '{print $5, $9}' | tee -a "$SUMMARY"
 
@@ -340,6 +353,8 @@ process.stdin.on("data", (c) => (raw += c)).on("end", () => {
   note "${arm}_installed_wallclock_budget_files=$(grep -rl 'Date.now() < deadline' "$DRIVER_PKG/dist" 2>/dev/null | wc -l | tr -d ' ')"
   CONFIG_SHA_FINAL="$(shasum -a 256 "$HOME/.openclaw/openclaw.json" | cut -d' ' -f1)"
   note "${arm}_config_sha_after=$CONFIG_SHA_FINAL (before=$CONFIG_SHA_BEFORE)"
+  SETTINGS_FINAL="$(settings_fingerprint "$HOME/.openclaw/openclaw.json")"
+  note "${arm}_settings_after=$SETTINGS_FINAL (before=$SETTINGS_BEFORE) config_keys_after=$(node -e 'const d=require(process.argv[1]);console.log(Object.keys(d).sort().join(","))' "$HOME/.openclaw/openclaw.json" 2>&1 | tail -1)"
   ARM_HEALTH="$code"
   ARM_PID="$pid"
 }
@@ -442,12 +457,13 @@ DATA_OK=no
 [ "$(cat "$HOME/.openclaw/proof-marker" 2>/dev/null)" = "MARKER-macos-186831" ] &&
   [ "$(cat "$HOME/.openclaw/workspace/note.txt" 2>/dev/null)" = "workspace-macos-186831" ] &&
   [ "$(cat "$HOME/.openclaw/proof/data.json" 2>/dev/null | tr -d '\n')" = '{"keep":"me","record":42}' ] && DATA_OK=yes
-[ "$CONFIG_SHA_FINAL" = "$CONFIG_SHA_BEFORE" ] && CONFIG_OK=yes || CONFIG_OK=no
+[ "$SETTINGS_FINAL" = "$SETTINGS_BEFORE" ] && SETTINGS_OK=yes || SETTINGS_OK=no
+[ "$CONFIG_SHA_FINAL" = "$CONFIG_SHA_BEFORE" ] && CONFIG_NOTE=byte-identical || CONFIG_NOTE=rewritten-by-doctor
 UPGRADE_ARM=none
 [ "${UPDATE_C_EXIT:-1}" -eq 0 ] && UPGRADE_ARM=phaseC
 [ "${UPDATE_B_EXIT:-1}" -eq 0 ] && UPGRADE_ARM=phaseB
 VERDICT=FAIL
 if [ "$UPGRADE_ARM" != none ] && [ "$VERSION_OK" = yes ] && [ "$DATA_OK" = yes ] &&
-   [ "$CONFIG_OK" = yes ] && [ "$ARM_HEALTH" = "200" ] && [ -n "$ARM_PID" ]; then VERDICT=PASS; fi
-note "VERDICT=$VERDICT upgradeArm=$UPGRADE_ARM phaseA_rpcExit=$UPDATE_RPC_EXIT phaseB_updateExit=$UPDATE_B_EXIT phaseC_updateExit=$UPDATE_C_EXIT versionAdvanced=$VERSION_OK dataIntact=$DATA_OK configIntact=$CONFIG_OK ${UPGRADE_ARM}_health=$ARM_HEALTH ${UPGRADE_ARM}_pid=$ARM_PID"
+   [ "$SETTINGS_OK" = yes ] && [ "$ARM_HEALTH" = "200" ] && [ -n "$ARM_PID" ]; then VERDICT=PASS; fi
+note "VERDICT=$VERDICT upgradeArm=$UPGRADE_ARM phaseA_rpcExit=$UPDATE_RPC_EXIT phaseB_updateExit=$UPDATE_B_EXIT phaseC_updateExit=$UPDATE_C_EXIT versionAdvanced=$VERSION_OK dataIntact=$DATA_OK settingsIntact=$SETTINGS_OK configFile=$CONFIG_NOTE ${UPGRADE_ARM}_health=$ARM_HEALTH ${UPGRADE_ARM}_pid=$ARM_PID"
 [ "$VERDICT" = PASS ] || exit 1
