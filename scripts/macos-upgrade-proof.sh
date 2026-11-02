@@ -114,6 +114,27 @@ note "config_sha_before=$CONFIG_SHA_BEFORE"
 say "state dir before update"
 ls -la "$HOME/.openclaw" 2>/dev/null | tail -n +2 | awk '{print $5, $9}' | tee -a "$SUMMARY"
 
+say "probe the staged executor fence exactly as the updater does"
+rm -rf /tmp/stageprobe && mkdir -p /tmp/stageprobe
+npm install --prefix /tmp/stageprobe --no-audit --no-fund "openclaw@$CANDIDATE" >/tmp/stageprobe.npm 2>&1
+note "stageprobe_npm_exit=$? tail=$(tail -3 /tmp/stageprobe.npm | tr '\n' ';')"
+PROBE_ENTRY=/tmp/stageprobe/node_modules/openclaw/dist/entry.js
+ls -l "$PROBE_ENTRY" 2>&1 | tail -2
+set +e
+OPENCLAW_NO_RESPAWN=1 node "$PROBE_ENTRY" gateway install --update-executor check --json \
+  >/tmp/stageprobe.json 2>/tmp/stageprobe.err
+note "stageprobe_exit=$?"
+set -e
+echo "--- stageprobe stdout ---"; head -c 1500 /tmp/stageprobe.json; echo
+echo "--- stageprobe stderr ---"; head -c 1500 /tmp/stageprobe.err; echo
+node -e '
+const fs = require("node:fs");
+let doc;
+try { doc = JSON.parse(fs.readFileSync("/tmp/stageprobe.json", "utf8")); } catch (e) { console.log("stageprobe_stdout_not_json=" + e.message); process.exit(0); }
+console.log("stageprobe_updateExecutor=" + doc.updateExecutor);
+for (const [k, v] of Object.entries(doc)) if (typeof v === "boolean" || k.endsWith("Binding")) console.log("  capability " + k + "=" + v);
+'
+
 say "run the shipped update entry (published driver -> candidate) on launchd"
 rm -rf /tmp/openclaw-update-run-handoff-* "${TMPDIR:-/tmp}/openclaw-update-run-handoff-"* 2>/dev/null
 find "$HOME/.openclaw/tmp" -maxdepth 2 -name '*handoff*' -exec rm -rf {} + 2>/dev/null
