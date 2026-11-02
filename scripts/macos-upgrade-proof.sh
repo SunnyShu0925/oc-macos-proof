@@ -9,7 +9,7 @@ CANDIDATE="${CANDIDATE_VERSION:-2026.10.10}"
 # packed = serve the reviewed head build from a loopback registry
 # npm      = upgrade to the published successor release from registry.npmjs.org
 CANDIDATE_SOURCE="${CANDIDATE_SOURCE:-packed}"
-TARGET_SPEC="${TARGET_SPEC:-openclaw@beta}"
+TARGET_SPEC="${TARGET_SPEC:-openclaw}"
 PORT_GATEWAY="${PORT_GATEWAY:-19031}"
 PORT_REGISTRY="${PORT_REGISTRY:-48741}"
 SUMMARY=/tmp/macos-proof-summary.txt
@@ -111,9 +111,9 @@ NPM_REGISTRY_URL="http://127.0.0.1:$PORT_REGISTRY/"
 TARGET_SPEC=openclaw
 else
 say "resolve the published successor release as the upgrade target"
-CANDIDATE="$(npm view "$TARGET_SPEC" version 2>/dev/null | tail -1)"
+CANDIDATE="$(npm view openclaw dist-tags.beta 2>/dev/null | tail -1)"
 [ -n "$CANDIDATE" ] || { echo "candidate_resolution_failed spec=$TARGET_SPEC"; exit 1; }
-note "target_spec=$TARGET_SPEC resolved_candidate=$CANDIDATE registry=public"
+note "target_spec=$TARGET_SPEC tag=$CANDIDATE registry=public"
 NPM_REGISTRY_URL="https://registry.npmjs.org/"
 fi
 
@@ -208,7 +208,7 @@ npm_config_registry="$NPM_REGISTRY_URL" \
 npm_config_allow_scripts=@google/genai,esbuild,koffi,protobufjs,openclaw \
 npm_config_ignore_scripts=false \
 OPENCLAW_UPDATE_PACKAGE_SPEC="$TARGET_SPEC" \
-  "$DRIVER_BIN" gateway call update.run --params '{"timeoutMs":900000}' --timeout 900000 --json \
+  "$DRIVER_BIN" gateway call update.run --params '{"timeoutMs":900000,"tag":"'"$CANDIDATE"'"}' --timeout 900000 --json \
     >/tmp/update.json 2>/tmp/update.err
 UPDATE_RPC_EXIT=$?
 set +e
@@ -297,7 +297,7 @@ npm_config_registry="$NPM_REGISTRY_URL" \
 npm_config_allow_scripts=@google/genai,esbuild,koffi,protobufjs,openclaw \
 npm_config_ignore_scripts=false \
 OPENCLAW_UPDATE_PACKAGE_SPEC="$TARGET_SPEC" \
-  "$DRIVER_BIN" update --yes --json --timeout 1200 >/tmp/update-b.json 2>/tmp/update-b.err
+  "$DRIVER_BIN" update --yes --json --timeout 1200 --tag "$CANDIDATE" >/tmp/update-b.json 2>/tmp/update-b.err
 UPDATE_B_EXIT=$?
 set +e
 note "phaseB_update_exit=$UPDATE_B_EXIT phaseB_duration_s=$(( $(date +%s) - B_START ))"
@@ -361,7 +361,7 @@ npm_config_registry="$NPM_REGISTRY_URL" \
 npm_config_allow_scripts=@google/genai,esbuild,koffi,protobufjs,openclaw \
 npm_config_ignore_scripts=false \
 OPENCLAW_UPDATE_PACKAGE_SPEC="$TARGET_SPEC" \
-  "$DRIVER_BIN" update --yes --json --timeout 1200 >/tmp/update-c.json 2>/tmp/update-c.err
+  "$DRIVER_BIN" update --yes --json --timeout 1200 --tag "$CANDIDATE" >/tmp/update-c.json 2>/tmp/update-c.err
 UPDATE_C_EXIT=$?
 note "phaseC_update_exit=$UPDATE_C_EXIT phaseC_duration_s=$(( $(date +%s) - C_START ))"
 tail -25 /tmp/update-c.err
