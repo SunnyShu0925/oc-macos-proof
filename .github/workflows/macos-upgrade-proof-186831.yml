@@ -1,0 +1,103 @@
+name: macOS Installed Upgrade Proof (PR #186831)
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_branch:
+        description: PR branch on SunnyShu0925/openclaw to build the candidate from
+        required: true
+        default: fix/managed-service-handoff-recovery-deadline-wall-clock-165
+      driver_version:
+        description: Published openclaw version used as the update driver
+        required: true
+        default: "2026.10.9"
+      candidate_version:
+        description: Version pinned on the candidate build (must exceed the driver)
+        required: true
+        default: "2026.10.10"
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade:
+    runs-on: macos-14
+    timeout-minutes: 180
+    steps:
+      - name: Checkout proof harness
+        uses: actions/checkout@v4
+
+      - name: Checkout openclaw PR branch (fork)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: ${{ inputs.pr_branch }}
+          path: openclaw
+          fetch-depth: 1
+
+      - name: Report head identity
+        working-directory: openclaw
+        run: |
+          git rev-parse HEAD
+          git log -1 --format='%H %s'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+
+      - name: Install deps (pnpm)
+        working-directory: openclaw
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Pin the build version before compiling
+        working-directory: openclaw
+        env:
+          PACKAGE_VERSION: ${{ inputs.candidate_version }}
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const doc = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            doc.version = process.env.PACKAGE_VERSION;
+            fs.writeFileSync("package.json", JSON.stringify(doc, null, 2) + "\n");
+            console.log("pinned_version=" + doc.version);
+          '
+
+      - name: Build dist from the reviewed head (package profile)
+        working-directory: openclaw
+        # The package profile keeps the canonical dts that
+        # package-openclaw-for-docker --skip-build requires.
+        run: pnpm build:package
+        continue-on-error: true
+
+      - name: Assert the sealed dist entry exists
+        working-directory: openclaw
+        run: |
+          ls -l dist/entry.js
+          grep -o 'createMonotonicBudget(params.recoveryTimeoutMs)' dist/update-managed-service-handoff-current-*.mjs
+
+      - name: Run the published-driver to candidate upgrade on launchd
+        working-directory: openclaw
+        env:
+          DRIVER_VERSION: ${{ inputs.driver_version }}
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+        run: bash "$GITHUB_WORKSPACE/scripts/macos-upgrade-proof.sh"
+
+      - name: Print the summary
+        if: always()
+        run: cat /tmp/macos-proof-summary.txt || true
+
+      - name: Upload traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-upgrade-traces
+          path: |
+            /tmp/macos-proof-summary.txt
+            /tmp/update.json
+            /tmp/update.err
+            /tmp/registry.log
+            handoff-dir-*
+          if-no-files-found: warn
