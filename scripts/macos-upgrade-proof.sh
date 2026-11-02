@@ -112,6 +112,7 @@ ls -la "$HOME/.openclaw" 2>/dev/null | tail -n +2 | awk '{print $5, $9}' | tee -
 
 say "run the shipped update entry (published driver -> candidate) on launchd"
 rm -rf /tmp/openclaw-update-run-handoff-* "${TMPDIR:-/tmp}/openclaw-update-run-handoff-"* 2>/dev/null
+find "$HOME/.openclaw/tmp" -maxdepth 2 -name '*handoff*' -exec rm -rf {} + 2>/dev/null
 START=$(date +%s)
 set +e
 npm_config_registry="http://127.0.0.1:$PORT_REGISTRY/" \
@@ -133,13 +134,18 @@ for (const step of res.steps || []) console.log("  step: " + (step.name ?? step.
 ' | tee -a "$SUMMARY"
 
 say "settle the managed handoff"
-for _ in $(seq 1 90); do
-  HELPERS="$(pgrep -f 'update-managed-service-handoff' 2>/dev/null | tr '\n' ' ' || true)"
+SETTLE_START=$(date +%s)
+for i in $(seq 1 260); do
+  HELPERS="$(pgrep -f 'update-managed-service-handoff|openclaw update' 2>/dev/null | tr '\n' ' ' || true)"
   AFTER_CODE=$(curl -s -m 2 -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT_GATEWAY/health" || true)
   AFTER_VERSION="$("$DRIVER_BIN" --version 2>&1 | tail -1)"
   if [ -z "$HELPERS" ] && [ "$AFTER_CODE" = "200" ] && echo "$AFTER_VERSION" | grep -q "$CANDIDATE"; then break; fi
-  sleep 4
+  if [ $((i % 20)) -eq 0 ]; then
+    note "settle_wait round=$i elapsed_s=$(( $(date +%s) - SETTLE_START )) version='$AFTER_VERSION' health=$AFTER_CODE helpers='$HELPERS'"
+  fi
+  sleep 5
 done
+note "settle_elapsed_s=$(( $(date +%s) - SETTLE_START ))"
 AFTER_PID="$(launchctl print "$TARGET" 2>/dev/null | awk '/^[[:space:]]*pid = /{print $3; exit}')"
 note "after_version=$("$DRIVER_BIN" --version 2>&1 | tail -1)"
 note "after_health=$AFTER_CODE after_pid=$AFTER_PID pre_pid=$PRE_PID"
@@ -154,14 +160,32 @@ note "installed_monotonic_budget_files=$(grep -rl 'createMonotonicBudget' "$DRIV
 note "installed_wallclock_budget_files=$(grep -rl 'deadline - Date.now()' "$DRIVER_PKG/dist" 2>/dev/null | wc -l | tr -d ' ')"
 
 say "production handoff trace"
-for d in /tmp/openclaw-update-run-handoff-* "${TMPDIR:-/tmp}"/openclaw-update-run-handoff-*; do
-  [ -d "$d" ] || continue
-  echo "## $d"
-  ls -la "$d" | tail -n +2 | awk '{print $5, $9}'
-  tail -40 "$d/handoff.log" 2>/dev/null
-  cp -a "$d" "$GITHUB_WORKSPACE/handoff-dir-$(basename "$d")" 2>/dev/null
+HANDOFF_ROOTS=("$HOME/.openclaw/tmp" "${TMPDIR:-/tmp}" /tmp "$HOME/.openclaw")
+for root in "${HANDOFF_ROOTS[@]}"; do
+  [ -d "$root" ] || continue
+  while IFS= read -r log; do
+    d="$(dirname "$log")"
+    echo "## $log"
+    ls -la "$d" | tail -n +2 | awk '{print $5, $9}'
+    tail -60 "$log" 2>/dev/null
+    cp -a "$d" "$GITHUB_WORKSPACE/handoff-dir-$(basename "$d")" 2>/dev/null
+  done < <(find "$root" -maxdepth 3 -name 'handoff.log' 2>/dev/null | head -6)
+done
+say "update reports"
+ls -la "$HOME/.openclaw/update-reports" 2>/dev/null | tail -n +2 | awk '{print $5, $9}'
+for f in "$HOME"/.openclaw/update-reports/*; do
+  [ -f "$f" ] || continue
+  echo "## $f"
+  tail -40 "$f"
+done
+say "gateway service log tail"
+for f in "$HOME"/.openclaw/logs/*; do
+  [ -f "$f" ] || continue
+  echo "## $f"
+  tail -30 "$f"
 done
 echo "=== registry requests ==="
+wc -l /tmp/registry.log 2>/dev/null
 tail -10 /tmp/registry.log 2>/dev/null
 
 say "verdict"
