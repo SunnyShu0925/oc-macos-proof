@@ -35,7 +35,13 @@ import { homedir } from "node:os";
 const wt = process.env.OPENCLAW_DIR ?? "/tmp/wt186831-fix";
 const mode = process.argv[2] ?? "FIXED";
 const recoveryTimeoutMs = Number(process.argv[3] ?? 30000);
+// Negative values step the wall clock backward (an NTP / manual correction the other way).
 const clockStepForwardMs = Number(process.argv[4] ?? 60000);
+// goal=success: the bootstrapped job comes back up, so the loop restores it.
+// goal=stale:   launchd keeps reporting the pre-update generation's pid (its documented
+//               ExitTimeOut teardown window), so the loop really polls print+sleep(500)
+//               until the budget is consumed — only the polling DURATION distinguishes arms.
+const goal = process.argv[5] ?? "success";
 
 const uid = Number(process.env.PROOF_UID ?? process.getuid());
 const label = "com.openclaw.proofrecovery";
@@ -195,8 +201,34 @@ const seedPrint = sh("launchctl", ["print", target]);
 console.error("[setup] seed print code=" + seedPrint.code);
 console.error("[setup] seed print head: " + seedPrint.stdout.split("\n").slice(0, 8).join("\n"));
 
-// parentPid = this driver process; recovery compares printed pid against it.
-const parentPid = process.pid;
+// parentPid is the "pre-update generation" recovery must not mistake for the service.
+//   success goal: the driver's own pid — the job has no pid yet, so recovery can bring a
+//     fresh generation up and restore it.
+//   stale goal: reproduce launchd's documented ExitTimeOut teardown window — bring the job
+//     up FOR REAL, then hand its live pid to recovery as the pre-update generation. Every
+//     inspection then prints pid === params.parentPid, so the loop enters its
+//     sleep(min(500, remainingMs())) polling budget and the budget is what expires.
+let parentPid = process.pid;
+if (goal === "stale") {
+  const ks = sh("launchctl", ["kickstart", target]);
+  console.error("[setup] stale goal: kickstart -> code=" + ks.code + " " + ks.stderr.trim());
+  for (let attempt = 0; attempt < 40 && parentPid === process.pid; attempt += 1) {
+    const printed = sh("launchctl", ["print", target]);
+    const livePid = /^\s*pid = (\d+)$/m.exec(printed.stdout);
+    if (livePid) parentPid = Number(livePid[1]);
+    else await new Promise((r) => setTimeout(r, 250));
+  }
+  if (parentPid === process.pid) {
+    console.error("SETUP FAILED: launchd never reported a live pid to pin as the stale generation");
+    process.exit(1);
+  }
+  let staleAlive = false;
+  try {
+    process.kill(parentPid, 0);
+    staleAlive = true;
+  } catch {}
+  console.error("[setup] stale generation pinned: real launchd pid=" + parentPid + " alive=" + staleAlive);
+}
 
 // Stub readiness-probe module: restoreGatewayService imports
 // params.recoveryModulePath and calls waitForGatewayUpdateRecovery() after the
@@ -241,7 +273,7 @@ globalThis.__stepClock = () => {
   if (stepped) return;
   stepped = true;
   offset = Number(process.env.STEP_FORWARD_MS || 0);
-  console.error("[clock] stepping Date.now() forward by " + offset + "ms");
+  console.error("[clock] stepping Date.now() " + (offset < 0 ? "backward" : "forward") + " by " + offset + "ms");
 };
 `;
 
@@ -281,7 +313,7 @@ writeFileSync(preloadFile, preload);
 
 // Spawn the helper with the clock preload.
 const helperArgs = ["--import=" + preloadFile, harnessFile];
-console.error("[run] launching helper mode=" + mode + " recoveryTimeoutMs=" + recoveryTimeoutMs + " stepFwd=" + clockStepForwardMs);
+console.error("[run] launching helper mode=" + mode + " goal=" + goal + " recoveryTimeoutMs=" + recoveryTimeoutMs + " stepMs=" + clockStepForwardMs);
 const r = spawnSync(process.execPath, helperArgs, {
   env: {
     ...process.env,
@@ -291,7 +323,7 @@ const r = spawnSync(process.execPath, helperArgs, {
     PROOF_KICKED: join(dir, "kicked"),
   },
   encoding: "utf8",
-  timeout: Math.max(120000, recoveryTimeoutMs * 4),
+  timeout: Math.max(180000, recoveryTimeoutMs * 4 + Math.abs(clockStepForwardMs) * 3),
 });
 console.error(r.stdout);
 console.error(r.stderr);
@@ -310,15 +342,40 @@ if (!m) {
 }
 const restored = m[1] === "true";
 const wallElapsed = Number(m[2]);
-console.error("VERDICT[" + mode + "] restored=" + restored + " wallElapsedMs=" + wallElapsed);
+const trace = (r.stderr || "") + (r.stdout || "");
+const printCount = (trace.match(/\[trace\] launchctl print/g) || []).length;
+const armLabel = mode + "/" + goal + "/" + (clockStepForwardMs < 0 ? "backward" : "forward");
+console.error(
+  "VERDICT[" + armLabel + "] restored=" + restored + " wallElapsedMs=" + wallElapsed +
+  " launchctlPrints=" + printCount,
+);
 
-if (mode === "FIXED") {
-  // post-fix: must recover successfully and bounded
-  if (!restored) { console.error("VERDICT FAILED: FIXED should restore"); process.exit(1); }
-  if (wallElapsed > recoveryTimeoutMs + 1000) { console.error("VERDICT FAILED: FIXED over budget"); process.exit(1); }
-  console.error("VERDICT PASS: FIXED restored=true bounded");
+if (goal === "success") {
+  if (mode === "FIXED") {
+    // post-fix: must recover successfully and bounded
+    if (!restored) { console.error("VERDICT FAILED: FIXED should restore"); process.exit(1); }
+    if (wallElapsed > recoveryTimeoutMs + 1000) { console.error("VERDICT FAILED: FIXED over budget"); process.exit(1); }
+    console.error("VERDICT PASS: FIXED restored=true bounded");
+  } else {
+    // pre-fix: forward step truncates the loop -> restored=false
+    if (restored) { console.error("VERDICT FAILED: OLD should not restore under forward step"); process.exit(1); }
+    console.error("VERDICT PASS: OLD restored=false (loop truncated by forward step)");
+  }
 } else {
-  // pre-fix: forward step truncates the loop -> restored=false
-  if (restored) { console.error("VERDICT FAILED: OLD should not restore under forward step"); process.exit(1); }
-  console.error("VERDICT PASS: OLD restored=false (loop truncated by forward step)");
+  // stale goal: the service generation never retires inside the budget, so BOTH arms end
+  // restored=false. The discriminator is how long the real launchd polling loop ran.
+  const bounded = wallElapsed <= recoveryTimeoutMs + 2500;
+  if (mode === "FIXED") {
+    if (!bounded) {
+      console.error("VERDICT FAILED: FIXED polled " + wallElapsed + "ms beyond its " + recoveryTimeoutMs + "ms budget");
+      process.exit(1);
+    }
+    console.error("VERDICT PASS: FIXED stopped at the monotonic budget (" + wallElapsed + "ms, " + printCount + " real launchctl prints)");
+  } else {
+    if (wallElapsed < recoveryTimeoutMs + Math.abs(clockStepForwardMs) / 2) {
+      console.error("VERDICT FAILED: OLD stopped at " + wallElapsed + "ms; the backward step did not stretch the wall-clock budget");
+      process.exit(1);
+    }
+    console.error("VERDICT PASS: OLD polled " + wallElapsed + "ms (" + printCount + " real launchctl prints) — budget stretched by the " + clockStepForwardMs + "ms wall-clock step");
+  }
 }

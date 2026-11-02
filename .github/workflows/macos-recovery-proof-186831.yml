@@ -37,21 +37,37 @@ jobs:
           corepack enable
           pnpm install --frozen-lockfile
 
-      # --- macOS native-launchd recovery, forward wall-clock step ---
-      - name: Recovery FIXED (performance.now budget)
+      # --- macOS native-launchd recovery, forward wall-clock step (service restored) ---
+      - name: Recovery FIXED forward step (performance.now budget)
         working-directory: openclaw
-        run: node --import tsx/esm $GITHUB_WORKSPACE/proofrepo/proof/186831/macos-recovery-proof.mts FIXED 30000 60000
+        run: node --import tsx/esm $GITHUB_WORKSPACE/proofrepo/proof/186831/macos-recovery-proof.mts FIXED 30000 60000 success
         env:
           OPENCLAW_DIR: ${{ github.workspace }}/openclaw
 
-      - name: Recovery OLD (Date.now deadline)
+      - name: Recovery OLD forward step (Date.now deadline)
         working-directory: openclaw
-        run: node --import tsx/esm $GITHUB_WORKSPACE/proofrepo/proof/186831/macos-recovery-proof.mts OLD 30000 60000
+        run: node --import tsx/esm $GITHUB_WORKSPACE/proofrepo/proof/186831/macos-recovery-proof.mts OLD 30000 60000 success
+        env:
+          OPENCLAW_DIR: ${{ github.workspace }}/openclaw
+
+      # --- macOS native-launchd recovery, backward wall-clock step (real polling loop) ---
+      # The job stays on its pre-update generation (launchd's documented ExitTimeOut
+      # teardown window), so the shipped loop polls real `launchctl print` + sleep(500)
+      # until its budget expires. Only the polling DURATION separates the arms.
+      - name: Recovery FIXED backward step (monotonic budget holds)
+        working-directory: openclaw
+        run: node --import tsx/esm $GITHUB_WORKSPACE/proofrepo/proof/186831/macos-recovery-proof.mts FIXED 4000 -60000 stale
+        env:
+          OPENCLAW_DIR: ${{ github.workspace }}/openclaw
+
+      - name: Recovery OLD backward step (wall-clock budget inflates)
+        working-directory: openclaw
+        run: node --import tsx/esm $GITHUB_WORKSPACE/proofrepo/proof/186831/macos-recovery-proof.mts OLD 4000 -60000 stale
         env:
           OPENCLAW_DIR: ${{ github.workspace }}/openclaw
 
       - name: Collect verdict
         if: always()
         run: |
-          echo "### macOS native-launchd recovery forward-step proof (PR #186831)"
-          echo "See the two 'Recovery FIXED/OLD' step logs for VERDICT lines."
+          echo "### macOS native-launchd recovery proof, both wall-clock directions (PR #186831)"
+          echo "See the four 'Recovery FIXED/OLD' step logs for VERDICT lines."
