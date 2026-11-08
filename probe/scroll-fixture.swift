@@ -28,6 +28,7 @@ func findScrollView(_ view: NSView) -> NSScrollView? {
 }
 
 let accessory = CommandLine.arguments.contains("--accessory")
+let noKey = CommandLine.arguments.contains("--nokey")
 let app = NSApplication.shared
 app.setActivationPolicy(accessory ? .accessory : .regular)
 
@@ -38,8 +39,12 @@ let window = NSWindow(
     defer: false)
 window.title = "Scroll Fixture"
 window.contentView = NSHostingView(rootView: Fixture())
-window.makeKeyAndOrderFront(nil)
-if !accessory {
+if noKey {
+    window.orderFront(nil)
+} else {
+    window.makeKeyAndOrderFront(nil)
+}
+if !accessory && !noKey {
     app.activate(ignoringOtherApps: true)
 }
 
