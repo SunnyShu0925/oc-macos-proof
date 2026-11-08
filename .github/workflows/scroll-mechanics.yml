@@ -1,0 +1,64 @@
+name: scroll-mechanics
+'on':
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+    - name: Checkout proof harness
+      uses: actions/checkout@v4
+      with:
+        path: proof
+    - name: Toolchain
+      run: |
+        sw_vers
+        swift --version
+    - name: Wheel matrix against a SwiftUI ScrollView
+      run: |
+        set -x
+        P="$GITHUB_WORKSPACE/proof/probe"
+        run_suite() {
+          mode="$1"
+          echo "###### suite mode=${mode:-regular}"
+          rm -f /tmp/offset.txt
+          swift "$P/scroll-fixture.swift" $mode > /tmp/fixture.log 2>&1 &
+          for i in $(seq 1 60); do
+            if [ -s /tmp/offset.txt ]; then break; fi
+            sleep 1
+          done
+          sleep 2
+          W=$(swift "$P/window-find.swift" "Scroll Fixture" | sed -n 's/^WID=//p')
+          R=$(swift "$P/window-find.swift" "Scroll Fixture" | sed -n 's/^RECT=//p')
+          echo "WID=$W RECT=$R"
+          CX=$(echo "$R" | awk -F, '{print int($1+$3/2)}')
+          CY=$(echo "$R" | awk -F, '{print int($2+$4/2)}')
+          echo "--- baseline ---"; tail -1 /tmp/offset.txt
+          for ticks in 2 8 60; do
+            swift "$P/scroll-wheel.swift" "$CX" "$CY" "$ticks" > /dev/null
+            sleep 1
+            echo "--- after ${ticks} ticks ---"; tail -1 /tmp/offset.txt
+          done
+          swift "$P/click-at.swift" "$CX" "$CY" > /dev/null
+          sleep 0.6
+          echo "--- after click ---"; tail -1 /tmp/offset.txt
+          swift "$P/scroll-wheel.swift" "$CX" "$CY" 2 > /dev/null
+          sleep 1
+          echo "--- after click+2 ticks ---"; tail -1 /tmp/offset.txt
+          screencapture -x -o -l "$W" /tmp/fixture-${mode:-regular}.png || true
+          swift "$P/ocr-window.swift" /tmp/fixture-${mode:-regular}.png 2>/dev/null | grep -o 'ROW-[0-9]*' | sort -u | head -4
+          cp /tmp/offset.txt /tmp/offset-${mode:-regular}.txt || true
+          pkill -f scroll-fixture || true
+          sleep 2
+        }
+        run_suite ""
+        run_suite "--accessory"
+    - name: Collect
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: scroll-mechanics
+        path: |
+          /tmp/offset-*.txt
+          /tmp/fixture.log
+          /tmp/fixture-*.png
