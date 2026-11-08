@@ -1,0 +1,41 @@
+Agent Events
+Agent Events
+LIFECYCLE run 879ee244-6104-47eT-9073-093c6d238586
+LIFECYCLE run 879ee244-6104-47ef-9073-093c6d238586
+"phase" : "model",
+"provider"
+:null,
+"model" : null
+LIFECYCLE run 879ee244-6104-47ef-9073-093c6d238586
+"aborted" : false,
+"phase" : "finishing",
+"stopReason": "stop",
+"livenessState": "working",
+"endedAt" : 1794108915478
+USAGE
+run 879ee244-6104-47ef-9073-093c6d238586
+ASSISTANT run 879ee244-6104-47et-9073-093c6d238586
+"text" : "stub reply",
+"delta" : "stub reply",
+"itemId" : "0209b2b8-ee6b-4307-be9d-078f77d870c8:1"
+LIFECYCLE run 879ee244-6104-47eT-9073-093c6d238586
+"phase": "model",
+"model": "stub-1",
+"provider": "stub"
+LIFECYCLE run 879ee244-6104-47eT-9073-093c6d238586
+"phase": "start",
+"startedAt" : 1794108915278
+LIFECYCLE run ee0257cb-a7ed-4c32-a854-7f3441499b32
+LIFECYCLE run ee0257cb-a7ed-4c32-a854-713441499b32
+"provider": null,
+"nhase" : "model".
+Clear
+03:35:15.576
+03:35:15.516
+03:35:15.478
+03:35:15.461
+03:35:15.458
+03:35:15.455
+03:35:15.278
+03:35:04.437
+03:35:04.309
