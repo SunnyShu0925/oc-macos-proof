@@ -1,0 +1,24 @@
+name: screen-set
+'on':
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+    - name: Checkout proof harness
+      uses: actions/checkout@v4
+      with:
+        path: proof
+    - name: Set 1920x1080 and report geometry
+      run: |
+        set -x
+        brew install displayplacer 2>&1 | tail -2 || true
+        swift "$GITHUB_WORKSPACE/proof/probe/screen-modes.swift"
+        CURRENT=$(displayplacer list | grep -o 'displayplacer "id:[^"]*"' | tail -1 | sed 's/^displayplacer //' | tr -d '"')
+        echo "CURRENT=$CURRENT"
+        NEW=$(echo "$CURRENT" | sed 's/res:[0-9x]*/res:1920x1080/; s/hz:[0-9]*/hz:60/')
+        echo "NEW=$NEW"
+        displayplacer "$NEW" || displayplacer 1920x1080x32@60 || true
+        sleep 5
+        swift "$GITHUB_WORKSPACE/proof/probe/screen-modes.swift"
