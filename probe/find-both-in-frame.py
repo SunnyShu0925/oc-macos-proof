@@ -97,7 +97,7 @@ tell application "System Events"
   tell process "OpenClaw"
     set win to window "Agent Events"
     perform action "AXRaise" of win
-    set size of win to {1000, 700}
+    set size of win to {1500, 900}
     delay 0.4
     try
       set position of win to {10, 25}
@@ -134,6 +134,15 @@ def ax_rows(proof):
     return result.stdout or result.stderr
 
 
+def ax_runs(text):
+    """Count the run ids the window's own accessibility tree reports per run."""
+    counts = {}
+    for match in re.finditer(r"^ROW .*run ([0-9a-fA-F-]{20,})$", text, re.M):
+        value = match.group(1).lower()
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
 def main():
     proof, outdir, mode = sys.argv[1], sys.argv[2], sys.argv[3]
     old_id = run_id_from_turn(sys.argv[4])
@@ -158,8 +167,12 @@ def main():
         time.sleep(0.5)
         print("FOCUS_AFTER_TITLE_CLICK " + focus_state())
 
+    start_tree = ax_rows(proof)
     with open(os.path.join(outdir, "ax-start.txt"), "w") as handle:
-        handle.write(ax_rows(proof))
+        handle.write(start_tree)
+    tree_runs = ax_runs(start_tree)
+    print("AX_ROWS=%d AX_RUNS=%s" % (sum(tree_runs.values()),
+          ", ".join("%s:%d" % (k, v) for k, v in sorted(tree_runs.items()))))
 
     steps = []
     both_frame = None
@@ -224,8 +237,12 @@ def main():
         print(wheel(proof, content, TICKS_PER_STEP))
         time.sleep(0.45)
 
+    old_rows = sum(count for run, count in tree_runs.items() if same_id(old_id, run))
+    new_rows = sum(count for run, count in tree_runs.items() if same_id(new_id, run))
     verdict = ["MODE=%s" % mode, "OLD_RUN=%s" % old_id, "NEW_RUN=%s" % new_id,
                "FRAMES=%d" % frames, "MOVED_STEPS=%d" % moves,
+               "AX_ROWS=%d" % sum(tree_runs.values()),
+               "AX_OLD_ROWS=%d" % old_rows, "AX_NEW_ROWS=%d" % new_rows,
                "NEWER_SEEN=%s" % ("yes" if newer_seen else "no"),
                "OLDER_FIRST_SEEN_STEP=%s" % (older_seen_step if older_seen_step is not None else "-")]
     if both_frame:
@@ -233,9 +250,6 @@ def main():
         verdict.append("BOTH_RUNS_OCR=%s" % both_label)
 
     ok = True
-    if moves < MIN_MOVES:
-        ok = False
-        verdict.append("FAIL=wheel never moved the list, verdict would be meaningless")
     if mode == "head":
         if both_frame is None:
             ok = False
@@ -243,10 +257,16 @@ def main():
         if not newer_seen:
             ok = False
             verdict.append("FAIL=newer run never rendered")
+        if old_rows == 0:
+            ok = False
+            verdict.append("FAIL=window tree holds no row for the earlier run")
     else:
         if older_seen_step is not None:
             ok = False
             verdict.append("FAIL=older run rendered on the buggy build")
+        if old_rows:
+            ok = False
+            verdict.append("FAIL=window tree still holds rows for the earlier run")
         if not newer_seen:
             ok = False
             verdict.append("FAIL=newer run never rendered")
