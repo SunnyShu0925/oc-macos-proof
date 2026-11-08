@@ -6,7 +6,13 @@ must contain both turn run ids at the same scroll offset. Expected ids come from
 the turn JSON (top-level runId), so the check does not depend on the
 accessibility tree.
 
-usage: find-both-in-frame.py <probe-dir> <out-dir> <head|base> <turn-a> <turn-b> [app-path]
+Two harness rules keep the verdict honest:
+  * the OpenClaw process has to be frontmost; wheel events only reach the
+    frontmost app on this runner;
+  * frames have to change before any verdict is drawn, otherwise "the older run
+    never appeared" would only mean "nothing ever scrolled".
+
+usage: find-both-in-frame.py <probe-dir> <out-dir> <head|base> <turn-a> <turn-b>
 exit 0 only when the mode's claim was observed.
 """
 
@@ -22,6 +28,7 @@ import time
 
 MAX_STEPS = 26
 TICKS_PER_STEP = 6
+MIN_MOVES = 3
 RUN_LABEL = re.compile(r"run\s+([0-9a-fA-F][0-9a-fA-F-]{18,})")
 
 
@@ -73,6 +80,17 @@ def osa(script):
     return sh(["osascript", "-e", script]).stdout.strip()
 
 
+def focus_state():
+    return osa("""
+tell application "System Events"
+  tell process "OpenClaw"
+    set win to window "Agent Events"
+    return "FOCUSED=" & (value of attribute "AXFocused" of win as string) & " MAIN=" & (value of attribute "AXMain" of win as string)
+  end tell
+end tell
+""")
+
+
 def resize_window():
     return osa("""
 tell application "System Events"
@@ -84,19 +102,18 @@ tell application "System Events"
     try
       set position of win to {10, 25}
     end try
-    delay 0.2
-    return "RESIZED=" & (size of win as string) & " FOCUSED=" & (value of attribute "AXFocused" of win as string) & " MAIN=" & (value of attribute "AXMain" of win as string)
+    return "RESIZED=" & (size of win as string)
   end tell
 end tell
 """)
 
 
-def focus_state():
+def frontmost():
     return osa("""
 tell application "System Events"
   tell process "OpenClaw"
-    set win to window "Agent Events"
-    return "FOCUSED=" & (value of attribute "AXFocused" of win as string) & " MAIN=" & (value of attribute "AXMain" of win as string)
+    set frontmost to true
+    return "FRONTMOST=" & (frontmost as string)
   end tell
 end tell
 """)
@@ -121,22 +138,25 @@ def main():
     proof, outdir, mode = sys.argv[1], sys.argv[2], sys.argv[3]
     old_id = run_id_from_turn(sys.argv[4])
     new_id = run_id_from_turn(sys.argv[5])
-    app_path = sys.argv[6] if len(sys.argv) > 6 else None
     os.makedirs(outdir, exist_ok=True)
 
     print(resize_window())
-    if app_path:
-        sh(["open", "-a", app_path])
-        time.sleep(2.0)
-    time.sleep(0.8)
+    time.sleep(0.5)
     wid, rect = window_probe(proof)
     print("WID=%s RECT=%s" % (wid, rect))
     if not rect:
         raise SystemExit("no Agent Events window")
-    point = (rect[0] + rect[2] // 2, rect[1] + rect[3] // 2)
-    print(click(proof, point))
-    print("AFTER_CLICK " + focus_state())
-    time.sleep(0.5)
+    content = (rect[0] + rect[2] // 2, rect[1] + rect[3] // 2)
+    title = (rect[0] + rect[2] // 2, rect[1] + 12)
+
+    print(frontmost())
+    time.sleep(0.8)
+    state = focus_state()
+    print("FOCUS " + state)
+    if "FOCUSED=true" not in state:
+        print(click(proof, title))
+        time.sleep(0.5)
+        print("FOCUS_AFTER_TITLE_CLICK " + focus_state())
 
     with open(os.path.join(outdir, "ax-start.txt"), "w") as handle:
         handle.write(ax_rows(proof))
@@ -147,7 +167,9 @@ def main():
     older_seen_step = None
     newer_seen = False
     frames = 0
+    moves = 0
     stale = 0
+    reactivations = 0
     previous = None
 
     for step in range(MAX_STEPS):
@@ -157,12 +179,10 @@ def main():
             continue
         frames += 1
         now = digest(png)
-        if previous is not None and now == previous:
+        if previous is not None and now != previous:
+            moves += 1
+        elif previous is not None:
             stale += 1
-            if stale == 4:
-                steps.append("step=%d scroll leaves the frame unchanged" % step)
-        else:
-            stale = 0
         previous = now
         text = ocr(proof, png)
         with open(os.path.join(outdir, "ocr-step-%02d.txt" % step), "w") as handle:
@@ -173,8 +193,9 @@ def main():
         newer_seen = newer_seen or new_token is not None
         if old_token is not None and older_seen_step is None:
             older_seen_step = step
-        steps.append("step=%d old=%s new=%s tokens=%d" % (
-            step, "yes" if old_token else "no", "yes" if new_token else "no", len(tokens)))
+        steps.append("step=%d old=%s new=%s tokens=%d moves=%d stale=%d" % (
+            step, "yes" if old_token else "no", "yes" if new_token else "no",
+            len(tokens), moves, stale))
         print(steps[-1])
 
         if old_token and new_token and both_frame is None:
@@ -192,17 +213,29 @@ def main():
             steps.append("step=%d reached empty list" % step)
             break
 
-        print(wheel(proof, point, TICKS_PER_STEP))
+        if stale >= 3 and reactivations < 2:
+            reactivations += 1
+            stale = 0
+            print("REACTIVATE " + frontmost())
+            print(click(proof, title))
+            time.sleep(0.4)
+            print("FOCUS " + focus_state())
+
+        print(wheel(proof, content, TICKS_PER_STEP))
         time.sleep(0.45)
 
     verdict = ["MODE=%s" % mode, "OLD_RUN=%s" % old_id, "NEW_RUN=%s" % new_id,
-               "FRAMES=%d" % frames, "NEWER_SEEN=%s" % ("yes" if newer_seen else "no"),
+               "FRAMES=%d" % frames, "MOVED_STEPS=%d" % moves,
+               "NEWER_SEEN=%s" % ("yes" if newer_seen else "no"),
                "OLDER_FIRST_SEEN_STEP=%s" % (older_seen_step if older_seen_step is not None else "-")]
     if both_frame:
         verdict.append("BOTH_RUNS_FRAME=%s" % os.path.basename(both_frame))
         verdict.append("BOTH_RUNS_OCR=%s" % both_label)
 
     ok = True
+    if moves < MIN_MOVES:
+        ok = False
+        verdict.append("FAIL=wheel never moved the list, verdict would be meaningless")
     if mode == "head":
         if both_frame is None:
             ok = False

@@ -36,7 +36,20 @@ jobs:
           CX=$(echo "$R" | awk -F, '{print int($1+$3/2)}')
           CY=$(echo "$R" | awk -F, '{print int($2+$4/2)}')
           echo "--- baseline ---"; tail -1 /tmp/offset.txt
-          case "$mode" in *background*) open -a Finder; sleep 1.5; echo "--- after Finder activation ---"; tail -1 /tmp/offset.txt;; esac
+          case "$mode" in
+            *background*)
+              open -a Finder; sleep 1.5
+              echo "--- after Finder activation ---"; tail -1 /tmp/offset.txt
+              swift "$P/scroll-wheel.swift" "$CX" "$CY" 8 > /dev/null; sleep 1
+              echo "--- background + 8 ticks ---"; tail -1 /tmp/offset.txt
+              OWNER=$(swift "$P/window-find.swift" "Scroll Fixture" | sed -n 's/^OWNER=\([^ ]*\).*/\1/p')
+              echo "OWNER=$OWNER"
+              osascript -e "tell application \"System Events\" to set frontmost of process \"$OWNER\" to true" || true
+              sleep 1.2
+              swift "$P/scroll-wheel.swift" "$CX" "$CY" 8 > /dev/null; sleep 1
+              echo "--- after set frontmost + 8 ticks ---"; tail -1 /tmp/offset.txt
+              ;;
+          esac
           for ticks in 2 8 60; do
             swift "$P/scroll-wheel.swift" "$CX" "$CY" "$ticks" > /dev/null
             sleep 1
