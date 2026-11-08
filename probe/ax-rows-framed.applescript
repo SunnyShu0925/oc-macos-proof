@@ -15,18 +15,27 @@ on run argv
 		if (count of matches) = 0 then return "NO_PROCESS_FOUND"
 		set p to item 1 of matches
 		tell p
-			set targetWindow to missing value
-			repeat with w in windows
+			set winIndex to 0
+			repeat with i from 1 to (count of windows)
 				try
-					if (name of w as string) is "Agent Events" then set targetWindow to w
+					if (name of window i as string) is "Agent Events" then set winIndex to i
 				end try
 			end repeat
-			if targetWindow is missing value then return "NO_WINDOW"
+			if winIndex = 0 then return "NO_WINDOW"
+			set targetWindow to window winIndex
 			set out to "WINDOW=Agent Events" & linefeed
+			set out to out & "WINDOW_INDEX=" & (winIndex as string) & linefeed
 			set wp to position of targetWindow
 			set ws to size of targetWindow
 			set out to out & "WIN " & (item 1 of wp as text) & " " & (item 2 of wp as text) & " " & (item 1 of ws as text) & " " & (item 2 of ws as text) & linefeed
-			repeat with e in (entire contents of targetWindow)
+			set elems to {}
+			try
+				set elems to (entire contents of targetWindow)
+			on error errMsg
+				set out to out & "CONTENTS_ERROR=" & errMsg & linefeed
+			end try
+			set out to out & "ELEMENTS=" & (count of elems as string) & linefeed
+			repeat with e in elems
 				try
 					if (role of e is "AXScrollArea") then
 						set sp to position of e
