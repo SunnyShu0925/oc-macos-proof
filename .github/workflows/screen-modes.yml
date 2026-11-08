@@ -1,0 +1,26 @@
+name: screen-modes
+'on':
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+    - name: Checkout proof harness
+      uses: actions/checkout@v4
+      with:
+        path: proof
+    - name: Current display geometry
+      run: swift "$GITHUB_WORKSPACE/proof/probe/screen-modes.swift"
+    - name: Try the largest advertised mode
+      run: |
+        set +e
+        brew install displayplacer 2>&1 | tail -3
+        echo "=== displayplacer list ==="
+        displayplacer list
+        MODE=$(displayplacer list | grep -Eo '[0-9]{3,5}x[0-9]{3,5}x32@[0-9]+' | sort -u | sort -t x -k1 -n | tail -1)
+        echo "PICKED=$MODE"
+        displayplacer "$MODE"
+        sleep 3
+        echo "=== after ==="
+        swift "$GITHUB_WORKSPACE/proof/probe/screen-modes.swift"
