@@ -59,7 +59,7 @@ func snapshot(_ note: String) {
     }
 }
 
-Timer.scheduledTimer(withInterval: 0.25, repeats: true) { _ in
+Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
     snapshot("beat")
 }
 

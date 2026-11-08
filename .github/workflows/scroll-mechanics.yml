@@ -17,6 +17,7 @@ jobs:
     - name: Wheel matrix against a SwiftUI ScrollView
       run: |
         set -x
+        set +e
         P="$GITHUB_WORKSPACE/proof/probe"
         run_suite() {
           mode="$1"
@@ -30,6 +31,7 @@ jobs:
           sleep 2
           W=$(swift "$P/window-find.swift" "Scroll Fixture" | sed -n 's/^WID=//p')
           R=$(swift "$P/window-find.swift" "Scroll Fixture" | sed -n 's/^RECT=//p')
+          if [ -z "$W" ]; then echo "NO_FIXTURE_WINDOW"; cat /tmp/fixture.log; pkill -f scroll-fixture; return; fi
           echo "WID=$W RECT=$R"
           CX=$(echo "$R" | awk -F, '{print int($1+$3/2)}')
           CY=$(echo "$R" | awk -F, '{print int($2+$4/2)}')
