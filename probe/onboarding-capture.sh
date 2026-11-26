@@ -27,18 +27,41 @@ CALLS="$POISON/calls.log"
 echo "==== capture label=$LABEL mode=$MODE ===="
 echo "app=$APP"
 echo "port=$PORT"
+echo "APP_BINARY_SHA=$(shasum -a 256 "$APP/Contents/MacOS/OpenClaw" 2>/dev/null | awk '{print $1}')"
 
-if [ "$MODE" = "broken" ]; then
-  cat > "$POISON/lsof" <<'STUB'
+# PortGuardian treats `lsof` exit 1 with no diagnostic on stderr as "nothing is
+# listening", and exit 1 with a diagnostic as a scan it could not trust. Those are
+# the two answers this probe replays, so the same binary is driven down both paths.
+case "$MODE" in
+  broken)
+    cat > "$POISON/lsof" <<'STUB'
 #!/bin/sh
 echo "$*" >> "$(dirname "$0")/calls.log"
 echo "lsof: proc_listpids failed: Cannot allocate memory" >&2
 exit 1
 STUB
+    ;;
+  free)
+    cat > "$POISON/lsof" <<'STUB'
+#!/bin/sh
+echo "$*" >> "$(dirname "$0")/calls.log"
+# Nothing matched: this is exactly what lsof does for an idle port.
+exit 1
+STUB
+    ;;
+  real)
+    ;;
+  *)
+    echo "unknown mode $MODE"
+    exit 2
+    ;;
+esac
+
+if [ "$MODE" != "real" ]; then
   chmod +x "$POISON/lsof"
   # The app resolves lsof through /usr/bin/env, so PATH decides which lsof runs.
   export PATH="$POISON:/usr/bin:/bin:/usr/sbin:/sbin"
-  echo "injected stub lsof at $POISON/lsof"
+  echo "injected stub lsof at $POISON/lsof ($MODE)"
 else
   export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
   echo "using the real lsof"
@@ -101,25 +124,36 @@ grep -E "WINDOW_COUNT|ELEMENTS=|Where should your assistant run" "$OUT/ax-$LABEL
 echo "--- AX text sample ---"
 grep -vE "missing value|^WINDOW_COUNT|^ELEMENTS|^===" "$OUT/ax-$LABEL-connection.txt" | head -40
 screencapture -x "$OUT/screen-$LABEL-connection.png" || true
-WID=$(swift "$PROBE_DIR/window-id.swift" OpenClaw 2>/dev/null | head -1)
-echo "WINDOW_ID=${WID:-none}"
-if [ -n "${WID:-}" ]; then
-  screencapture -x -o -l "$WID" "$OUT/window-$LABEL-connection.png" || true
-fi
 
 echo "--- local Gateway row copy ---"
 grep -E "Installs and starts automatically|Could not check whether port|is free|port $PORT" \
   "$OUT/ax-$LABEL-connection.txt" | head -10 || echo "NO_ROW_COPY"
 
-# The accessibility tree is the primary record, but System Events needs assistive
-# access on the runner. OCR of the same window is the fallback so the run still
-# carries machine-readable text when AX is refused.
-OCR_SOURCE="$OUT/window-$LABEL-connection.png"
-[ -s "$OCR_SOURCE" ] || OCR_SOURCE="$OUT/screen-$LABEL-connection.png"
-swift "$PROBE_DIR/ocr-window.swift" "$OCR_SOURCE" > "$OUT/ocr-$LABEL-connection.txt" 2>&1 || true
-echo "--- OCR from $(basename "$OCR_SOURCE"): $(wc -l < "$OUT/ocr-$LABEL-connection.txt" | tr -d ' ') lines ---"
-grep -iE "installs and starts automatically|could not check whether port|where should your assistant run" \
-  "$OUT/ocr-$LABEL-connection.txt" | head -5 || echo "NO_OCR_MATCH"
+# The subtitle sits inside a SwiftUI button, which the AX tree reports as "missing
+# value", so OCR of the window is the record. It is sampled repeatedly because the
+# probe runs on its own deadline and the row updates when it lands.
+final_ocr="$OUT/ocr-$LABEL-connection.txt"
+: > "$final_ocr"
+COPY_PATTERN="installs and starts automatically|could not check whether port|already in use|existing gateway detected"
+for poll in $(seq 1 10); do
+  WID=$(swift "$PROBE_DIR/window-id.swift" OpenClaw 2>/dev/null | head -1)
+  shot="$OUT/window-$LABEL-connection.png"
+  if [ -n "${WID:-}" ]; then
+    screencapture -x -o -l "$WID" "$shot" || true
+  else
+    shot="$OUT/screen-$LABEL-connection.png"
+  fi
+  [ -s "$shot" ] || continue
+  swift "$PROBE_DIR/ocr-window.swift" "$shot" > "$final_ocr" 2>&1 || true
+  match=$(grep -iE "$COPY_PATTERN" "$final_ocr" | head -1)
+  echo "poll $poll ($(basename "$shot")): ${match:-<no row copy yet>}"
+  if [ -n "$match" ]; then
+    break
+  fi
+  sleep 3
+done
+echo "--- OCR lines: $(wc -l < "$final_ocr" | tr -d ' ') ---"
+head -15 "$final_ocr" || true
 
 echo "--- stub invocations by the app ---"
 echo "STUB_CALLS=$(wc -l < "$CALLS" | tr -d ' ')"

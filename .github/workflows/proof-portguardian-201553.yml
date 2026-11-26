@@ -108,13 +108,13 @@ jobs:
           set -o pipefail
           bash proofrepo/probe/onboarding-capture.sh head-broken broken 2>&1 | tee /tmp/capture-head-broken.log
 
-      - name: Capture onboarding with the real lsof
+      - name: Capture onboarding when the probe reports an idle port
         env:
           APP_PATH: ${{ github.workspace }}/openclaw/dist/OpenClaw.app
           OUT_DIR: /tmp/capture
         run: |
           set -o pipefail
-          bash proofrepo/probe/onboarding-capture.sh head-healthy healthy 2>&1 | tee /tmp/capture-head-healthy.log
+          bash proofrepo/probe/onboarding-capture.sh head-free free 2>&1 | tee /tmp/capture-head-free.log
 
       - name: Assert the shipped copy follows the probe outcome
         run: |
@@ -124,19 +124,22 @@ jobs:
           UNKNOWN="Could not check whether port"
           DEFAULT_COPY="Installs and starts automatically"
           BROKEN="/tmp/capture/ax-head-broken-connection.txt /tmp/capture/ocr-head-broken-connection.txt"
-          HEALTHY="/tmp/capture/ax-head-healthy-connection.txt /tmp/capture/ocr-head-healthy-connection.txt"
+          FREE="/tmp/capture/ax-head-free-connection.txt /tmp/capture/ocr-head-free-connection.txt"
           copy_has() { grep -qiE "$1" $2 2>/dev/null; }
           copy_lacks() { ! grep -qiE "$1" $2 2>/dev/null; }
           echo "--- sources ---"
-          for f in $BROKEN $HEALTHY; do echo "$f: $(wc -l < "$f" 2>/dev/null || echo 0) lines"; done
+          for f in $BROKEN $FREE; do echo "$f: $(wc -l < "$f" 2>/dev/null || echo 0) lines"; done
           check "broken probe reached the shipped probe stub" \
             test -s /tmp/capture/poison-head-broken/calls.log
           check "the app asked for the Gateway port" \
             grep -q -- "-iTCP:18789" /tmp/capture/poison-head-broken/calls.log
           check "broken probe shows the unknown-port copy" copy_has "$UNKNOWN" "$BROKEN"
           check "broken probe drops the automatic-install promise" copy_lacks "$DEFAULT_COPY" "$BROKEN"
-          check "healthy probe keeps the default copy" copy_has "$DEFAULT_COPY" "$HEALTHY"
-          check "healthy probe does not claim the port is unreadable" copy_lacks "$UNKNOWN" "$HEALTHY"
+          check "an idle port keeps the default copy" copy_has "$DEFAULT_COPY" "$FREE"
+          check "an idle port does not claim it could not be checked" copy_lacks "$UNKNOWN" "$FREE"
+          check "both runs drove the same shipped binary" test \
+            "$(grep -h '^APP_BINARY_SHA=' /tmp/capture-head-broken.log)" = \
+            "$(grep -h '^APP_BINARY_SHA=' /tmp/capture-head-free.log)"
           echo "PROOF_FAIL=$fail"
           exit "$fail"
 
