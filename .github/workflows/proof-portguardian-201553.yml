@@ -105,6 +105,7 @@ jobs:
           APP_PATH: ${{ github.workspace }}/openclaw/dist/OpenClaw.app
           OUT_DIR: /tmp/capture
         run: |
+          set -o pipefail
           bash proofrepo/probe/onboarding-capture.sh head-broken broken 2>&1 | tee /tmp/capture-head-broken.log
 
       - name: Capture onboarding with the real lsof
@@ -112,6 +113,7 @@ jobs:
           APP_PATH: ${{ github.workspace }}/openclaw/dist/OpenClaw.app
           OUT_DIR: /tmp/capture
         run: |
+          set -o pipefail
           bash proofrepo/probe/onboarding-capture.sh head-healthy healthy 2>&1 | tee /tmp/capture-head-healthy.log
 
       - name: Assert the shipped copy follows the probe outcome
@@ -243,6 +245,7 @@ jobs:
           APP_PATH: ${{ github.workspace }}/openclaw/dist/OpenClaw.app
           OUT_DIR: /tmp/capture
         run: |
+          set -o pipefail
           bash proofrepo/probe/onboarding-capture.sh base-broken broken 2>&1 | tee /tmp/capture-base-broken.log
 
       - name: Assert the base still promises an automatic install
@@ -362,15 +365,15 @@ jobs:
           OUT_DIR: /tmp/upgrade
           OLD_RUNTIME: ${{ github.workspace }}/old/dist/OpenClaw.app/Contents/Resources/runtime
           NEW_RUNTIME: ${{ github.workspace }}/new/dist/OpenClaw.app/Contents/Resources/runtime
-          HOME: /tmp/upg
         run: |
-          mkdir -p /tmp/upg /tmp/upgrade
+          set -o pipefail
+          mkdir -p /tmp/upgrade
           bash proofrepo/probe/upgrade-preservation.sh 2>&1 | tee /tmp/upgrade/upgrade.log
 
       - name: Show the upgrade result
         if: always()
         run: |
-          grep -E "PASS:|FAIL:|PLIST_SHA|UPGRADE_FAIL|OLD_INSTALL_EXIT|intent|revision" \
+          grep -E "PASS:|FAIL:|PLIST_SHA|UPGRADE_FAIL|OLD_INSTALL_EXIT|RESUME_|OLD_BUN|NEW_BUN|HOME=|STATE_DIR=" \
             /tmp/upgrade/upgrade.log | head -40 || true
 
       - uses: actions/upload-artifact@v4
