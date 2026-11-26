@@ -138,7 +138,7 @@ jobs:
           ls -la /tmp/capture/*.png 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
-        if: always
+        if: always()
         with:
           name: onboarding-head
           path: |
@@ -269,7 +269,7 @@ jobs:
           cat /tmp/capture/poison-base-broken/calls.log 2>/dev/null | head -10 || true
 
       - uses: actions/upload-artifact@v4
-        if: always
+        if: always()
         with:
           name: onboarding-base
           path: |
@@ -366,13 +366,13 @@ jobs:
           bash proofrepo/probe/upgrade-preservation.sh 2>&1 | tee /tmp/upgrade/upgrade.log
 
       - name: Show the upgrade result
-        if: always
+        if: always()
         run: |
           grep -E "PASS:|FAIL:|PLIST_SHA|UPGRADE_FAIL|OLD_INSTALL_EXIT|intent|revision" \
             /tmp/upgrade/upgrade.log | head -40 || true
 
       - uses: actions/upload-artifact@v4
-        if: always
+        if: always()
         with:
           name: upgrade
           path: |
