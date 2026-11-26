@@ -1,7 +1,18 @@
 name: proof-190152
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      run:
+        description: which evidence to produce
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - head
+          - base
+          - upgrade
 
 permissions:
   contents: read
@@ -14,6 +25,7 @@ env:
 
 jobs:
   onboarding-head:
+    if: ${{ inputs.run == 'all' || inputs.run == 'head' }}
     runs-on: macos-26
     timeout-minutes: 180
     steps:
@@ -85,7 +97,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$HOME/.openclaw"
           touch "$HOME/.openclaw/disable-launchagent"
-          ./scripts/package-mac-app.sh 2>&1 | tail -60
+          ./scripts/package-mac-app.sh 2>&1 | tail -120
           ls -la dist/OpenClaw.app/Contents/MacOS/ || true
 
       - name: Capture onboarding with a broken lsof
@@ -148,14 +160,15 @@ jobs:
             /tmp/capture-head-*.log
 
   onboarding-base:
+    if: ${{ inputs.run == 'all' || inputs.run == 'base' }}
     runs-on: macos-26
     timeout-minutes: 180
     steps:
-      - name: Checkout PR proof branch
+      - name: Checkout upstream main
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.FORK }}
-          ref: ${{ env.PR_BRANCH }}
+          repository: openclaw/openclaw
+          ref: main
           path: openclaw
 
       - name: Checkout proof tooling
@@ -186,28 +199,13 @@ jobs:
         working-directory: openclaw
         run: node scripts/prepare-apple-mermaid.mjs
 
-      - name: Restore the pre-change sources
-        working-directory: openclaw
-        run: |
-          set -euo pipefail
-          git fetch --depth=1 https://github.com/openclaw/openclaw.git main
-          BASE=$(git rev-parse FETCH_HEAD)
-          echo "BASE_COMMIT=$BASE"
-          git checkout "$BASE" -- \
-            apps/macos/Sources/OpenClaw/GatewayProcessManager+Hosting.swift \
-            apps/macos/Sources/OpenClaw/GatewayProcessManager.swift \
-            apps/macos/Sources/OpenClaw/ManagedNodeGatewayMigration.swift \
-            apps/macos/Sources/OpenClaw/Onboarding.swift \
-            apps/macos/Sources/OpenClaw/OnboardingView+Monitoring.swift \
-            apps/macos/Sources/OpenClaw/PortGuardian.swift
-          echo "=== the conflating guard on this base ==="
-          grep -n "guard res.ok" apps/macos/Sources/OpenClaw/PortGuardian.swift || true
-          git diff --stat
-
       - name: Patch unrelated ChatUI build break
         working-directory: openclaw
         run: |
           set -euo pipefail
+          echo "BASE_COMMIT=$(git rev-parse HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "=== the conflating guard on this base ==="
+          grep -n "guard res.ok" apps/macos/Sources/OpenClaw/PortGuardian.swift || true
           FILE=apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaVideoAttachment.swift
           python3 - "$FILE" <<'PY'
           import sys
@@ -215,8 +213,11 @@ jobs:
           src = open(path).read()
           old = "                    VideoPlayer(player: player.player)"
           new = "                    Color.black"
-          assert old in src, "expected VideoPlayer line not found"
-          open(path, "w").write(src.replace(old, new, 1))
+          if old in src:
+              open(path, "w").write(src.replace(old, new, 1))
+              print("patched the unrelated ChatUI break")
+          else:
+              print("no ChatUI break on this tree")
           PY
 
       - name: Build plugin assets
@@ -234,7 +235,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$HOME/.openclaw"
           touch "$HOME/.openclaw/disable-launchagent"
-          ./scripts/package-mac-app.sh 2>&1 | tail -60
+          ./scripts/package-mac-app.sh 2>&1 | tail -120
           ls -la dist/OpenClaw.app/Contents/MacOS/ || true
 
       - name: Capture onboarding with a broken lsof
@@ -279,6 +280,7 @@ jobs:
             /tmp/capture-base-broken.log
 
   upgrade:
+    if: ${{ inputs.run == 'all' || inputs.run == 'upgrade' }}
     runs-on: macos-26
     timeout-minutes: 180
     steps:
@@ -327,7 +329,7 @@ jobs:
           pnpm plugins:assets:build || true
           mkdir -p "$HOME/.openclaw"
           touch "$HOME/.openclaw/disable-launchagent"
-          ./scripts/package-mac-app.sh 2>&1 | tail -40
+          ./scripts/package-mac-app.sh 2>&1 | tail -120
           ls -la dist/OpenClaw.app/Contents/Resources/runtime/bin/ || true
 
       - name: Package the candidate build
@@ -352,7 +354,7 @@ jobs:
           open(path, "w").write(src.replace(old_line, new_line, 1))
           PY
           pnpm plugins:assets:build
-          ./scripts/package-mac-app.sh 2>&1 | tail -40
+          ./scripts/package-mac-app.sh 2>&1 | tail -120
           ls -la dist/OpenClaw.app/Contents/Resources/runtime/bin/ || true
 
       - name: Run the real upgrade

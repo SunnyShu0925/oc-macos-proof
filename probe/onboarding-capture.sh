@@ -37,13 +37,13 @@ exit 1
 STUB
   chmod +x "$POISON/lsof"
   # The app resolves lsof through /usr/bin/env, so PATH decides which lsof runs.
-  launchctl setenv PATH "$POISON:/usr/bin:/bin"
+  export PATH="$POISON:/usr/bin:/bin:/usr/sbin:/sbin"
   echo "injected stub lsof at $POISON/lsof"
 else
-  launchctl setenv PATH "/usr/bin:/bin:/usr/sbin:/sbin"
+  export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
   echo "using the real lsof"
 fi
-launchctl getenv PATH || true
+echo "launch PATH=$PATH"
 
 # A clean install: no stored config and no prior onboarding, so the app opens
 # onboarding on its own. The launch-agent marker keeps startup from installing.
@@ -56,7 +56,12 @@ touch "$HOME/.openclaw/disable-launchagent"
 pkill -f "OpenClaw.app/Contents/MacOS/OpenClaw" >/dev/null 2>&1 || true
 sleep 2
 
-open "$APP" --args --attach-only
+# `open` forwards the shell's environment but LaunchServices normalizes PATH, so the
+# app is exec'd directly: Bundle.main is still the .app, and the poisoned PATH is
+# the one the probe actually sees.
+"$APP/Contents/MacOS/OpenClaw" --attach-only > "$OUT/app-$LABEL.log" 2>&1 &
+LAUNCHED_PID=$!
+echo "started app binary pid=$LAUNCHED_PID"
 
 APP_PID=""
 for i in $(seq 1 90); do
@@ -75,20 +80,26 @@ fi
 echo "--- what the app inherited ---"
 ps eww -p "$APP_PID" 2>/dev/null | tr ' ' '\n' | grep -E '^PATH=' || echo "PATH_NOT_VISIBLE"
 
-sleep 8
+sleep 10
 echo "--- welcome state ---"
 osascript "$PROBE_DIR/ax-all.applescript" > "$OUT/ax-$LABEL-welcome.txt" 2>&1 || true
 grep -E "WINDOW_COUNT|ELEMENTS=|Welcome to OpenClaw" "$OUT/ax-$LABEL-welcome.txt" | head -10
 screencapture -x "$OUT/screen-$LABEL-welcome.png" || true
 
 echo "--- advancing to the connection page ---"
-osascript "$PROBE_DIR/click-next.applescript" || true
+# SwiftUI buttons carry no AX title here, but Next is the window's default action,
+# so Return advances the same way it does for a user.
+osascript -e "tell application \"System Events\" to set frontmost of (first process whose unix id is $APP_PID) to true" || true
+sleep 2
+osascript -e 'tell application "System Events" to key code 36' || true
 # refreshLocalGatewayProbe uses the same 5 s probe deadline, so allow it to settle.
-sleep 12
+sleep 14
 
 echo "--- connection state ---"
 osascript "$PROBE_DIR/ax-all.applescript" > "$OUT/ax-$LABEL-connection.txt" 2>&1 || true
 grep -E "WINDOW_COUNT|ELEMENTS=|Where should your assistant run" "$OUT/ax-$LABEL-connection.txt" | head -10
+echo "--- AX text sample ---"
+grep -vE "missing value|^WINDOW_COUNT|^ELEMENTS|^===" "$OUT/ax-$LABEL-connection.txt" | head -40
 screencapture -x "$OUT/screen-$LABEL-connection.png" || true
 WID=$(swift "$PROBE_DIR/window-id.swift" OpenClaw 2>/dev/null | head -1)
 echo "WINDOW_ID=${WID:-none}"
