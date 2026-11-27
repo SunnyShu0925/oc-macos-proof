@@ -17,6 +17,7 @@ name: proof-portguardian-201553-v2
         options:
           - all
           - lifecycle
+          - lifecycle-no-listener
           - upgrade
           - regression
       mode:
@@ -45,7 +46,7 @@ jobs:
   # ================================================================ lifecycle
   lifecycle-head:
     name: lifecycle-head
-    if: ${{ inputs.run == 'all' || (inputs.run == 'lifecycle' && inputs.mode == 'head') }}
+    if: ${{ inputs.run == 'all' || (inputs.run == 'lifecycle' && inputs.mode == 'head') || inputs.run == 'lifecycle-no-listener' }}
     runs-on: macos-26
     timeout-minutes: 180
     steps:
@@ -135,7 +136,8 @@ jobs:
           BUNDLE_ID: ai.openclaw.mac
         run: |
           set -o pipefail
-          bash "$PROBE_DIR/lifecycle-capture.sh" lifecycle-head head 2>&1 \
+          SCENARIO="${{ inputs.run == 'lifecycle-no-listener' && 'no-listener' || 'with-listener' }}"
+          bash "$PROBE_DIR/lifecycle-capture.sh" lifecycle-head head "$SCENARIO" 2>&1 \
             | tee "$OUT_DIR/capture.log"
           rc=${PIPESTATUS[0]}
           echo "CAPTURE_RC=$rc"
@@ -165,7 +167,7 @@ jobs:
 
   lifecycle-base:
     name: lifecycle-base
-    if: ${{ inputs.run == 'all' || (inputs.run == 'lifecycle' && inputs.mode == 'base') }}
+    if: ${{ inputs.run == 'all' || (inputs.run == 'lifecycle' && inputs.mode == 'base') || inputs.run == 'lifecycle-no-listener' }}
     runs-on: macos-26
     timeout-minutes: 180
     steps:
@@ -257,7 +259,8 @@ jobs:
           BUNDLE_ID: ai.openclaw.mac
         run: |
           set -o pipefail
-          bash "$PROBE_DIR/lifecycle-capture.sh" lifecycle-base base 2>&1 \
+          SCENARIO="${{ inputs.run == 'lifecycle-no-listener' && 'no-listener' || 'with-listener' }}"
+          bash "$PROBE_DIR/lifecycle-capture.sh" lifecycle-base base "$SCENARIO" 2>&1 \
             | tee "$OUT_DIR/capture.log"
           rc=${PIPESTATUS[0]}
           echo "CAPTURE_RC=$rc"

@@ -1,7 +1,7 @@
 #!/bin/bash
 # PortGuardian PR #201553 - lifecycle head/base contrast.
 #
-#   lifecycle-capture.sh <label> <head|base>
+#   lifecycle-capture.sh <label> <head|base> [with-listener|no-listener]
 #
 # A real Gateway is already listening on 18789 (started from the *packaged*
 # app's bundled runtime, config auth none). A failing lsof stub is placed at the
@@ -20,7 +20,9 @@ set -uo pipefail
 
 LABEL="${1:?usage: lifecycle-capture.sh <label> <head|base>}"
 MODE="${2:?usage: lifecycle-capture.sh <label> <head|base>}"
+SCENARIO="${3:-with-listener}"
 case "$MODE" in head|base) ;; *) echo "bad mode: $MODE"; exit 2 ;; esac
+case "$SCENARIO" in with-listener|no-listener) ;; *) echo "bad scenario: $SCENARIO"; exit 2 ;; esac
 
 APP="${APP_PATH:?APP_PATH required}"
 OUT="${OUT_DIR:-/tmp/pg201553/lifecycle-$MODE}"
@@ -85,7 +87,7 @@ run_limited() {
   return "$rc"
 }
 
-say "==== lifecycle label=$LABEL mode=$MODE ===="
+say "==== lifecycle label=$LABEL mode=$MODE scenario=$SCENARIO ===="
 say "APP=$APP"
 say "APP_BINARY_SHA=$(shasum -a 256 "$APP/Contents/MacOS/OpenClaw" 2>/dev/null | awk '{print $1}')"
 say "PORT=$PORT"
@@ -104,23 +106,28 @@ cat > "$HOME/.openclaw/openclaw.json" <<JSON
 { "gateway": { "mode": "local", "port": $PORT, "auth": { "mode": "none" } } }
 JSON
 
-# ------------------------------------------------- start one real Gateway (1)
-if [ -x "$BUN" ] && [ -f "$MJS" ]; then
-  say "REAL_GATEWAY=runtime bundled in the packaged app"
-  ( cd "$HOME" && nohup "$BUN" "$MJS" gateway run > "$OUT/real-gateway.log" 2>&1 & echo $! > "$OUT/real-gateway.pid" )
-else
-  say "REAL_GATEWAY=pnpm openclaw gateway run (from OPENCLAW_DIR)"
-  ( cd "${OPENCLAW_DIR:-.}" && nohup pnpm openclaw gateway run > "$OUT/real-gateway.log" 2>&1 & echo $! > "$OUT/real-gateway.pid" )
-fi
+# ------------------------------------------- optionally start one real Gateway
 GW_UP=0
-for i in $(seq 1 120); do
-  if nc -z 127.0.0.1 "$PORT" 2>/dev/null; then GW_UP=1; break; fi
-  sleep 1
-done
+if [ "$SCENARIO" = with-listener ]; then
+  if [ -x "$BUN" ] && [ -f "$MJS" ]; then
+    say "REAL_GATEWAY=runtime bundled in the packaged app"
+    ( cd "$HOME" && nohup "$BUN" "$MJS" gateway run > "$OUT/real-gateway.log" 2>&1 & echo $! > "$OUT/real-gateway.pid" )
+  else
+    say "REAL_GATEWAY=pnpm openclaw gateway run (from OPENCLAW_DIR)"
+    ( cd "${OPENCLAW_DIR:-.}" && nohup pnpm openclaw gateway run > "$OUT/real-gateway.log" 2>&1 & echo $! > "$OUT/real-gateway.pid" )
+  fi
+  for i in $(seq 1 120); do
+    if nc -z 127.0.0.1 "$PORT" 2>/dev/null; then GW_UP=1; break; fi
+    sleep 1
+  done
+else
+  say "REAL_GATEWAY=none (no-listener scenario)"
+  i=0
+fi
 say "REAL_GATEWAY_UP=$GW_UP after ${i}s"
 say "--- real gateway log (raw tail) ---"
 tail -12 "$OUT/real-gateway.log" 2>/dev/null | sed -E 's/(token|apiKey|api_key|secret|password)[^,}]*/\1=<redacted>/Ig' || true
-if [ "$GW_UP" -ne 1 ]; then
+if [ "$SCENARIO" = with-listener ] && [ "$GW_UP" -ne 1 ]; then
   say "FAIL: a real Gateway never listened on $PORT"
   say "PROOF_FAIL=1"
   exit 1
@@ -251,19 +258,35 @@ check "the app consulted the failing lsof" test -s "$CALLS"
 check "the failing lsof saw the gateway port" grep -q -- "-iTCP:$PORT" "$CALLS"
 check "Debug -> Restart Gateway was clicked" grep -q 'CLICKED_RESTART_GATEWAY' "$OUT/menu.log"
 
-if [ "$MODE" = "head" ]; then
-  check "the real listener set is unchanged" test "$AFTER_PIDS" = "$BEFORE_PIDS"
-  check "there is still exactly one Gateway listener" test "$AFTER_COUNT" -eq 1
+if [ "$SCENARIO" = with-listener ]; then
+  if [ "$MODE" = "head" ]; then
+    check "the real listener set is unchanged" test "$AFTER_PIDS" = "$BEFORE_PIDS"
+    check "there is still exactly one Gateway listener" test "$AFTER_COUNT" -eq 1
+    check "no extra Gateway run process appeared" test "$AFTER_GW_PROCS" -le "$BEFORE_GW_PROCS"
+    check "no competing app-hosted child was started" test "$CHILD_ATTEMPT" -eq 0
+    check "the app showed attach or unknown-port handling" test "$ATTACH_COPY" -eq 1
+  else
+    COMPETED=0
+    if [ "$AFTER_PIDS" != "$BEFORE_PIDS" ] || [ "$AFTER_COUNT" -gt "$BEFORE_COUNT" ]; then COMPETED=1; fi
+    if [ "$AFTER_GW_PROCS" -gt "$BEFORE_GW_PROCS" ]; then COMPETED=1; fi
+    if [ "$CHILD_ATTEMPT" -eq 1 ]; then COMPETED=1; fi
+    say "LISTENER_CHANGED=$([ "$AFTER_PIDS" != "$BEFORE_PIDS" ] && echo 1 || echo 0)"
+    check "base attempted a competing child start" test "$COMPETED" -eq 1
+  fi
+elif [ "$MODE" = "head" ]; then
+  # An unreadable idle port must stay undecided: no child may claim it.
+  check "the port stayed empty" test "$AFTER_COUNT" -eq 0
   check "no extra Gateway run process appeared" test "$AFTER_GW_PROCS" -le "$BEFORE_GW_PROCS"
-  check "no competing app-hosted child was started" test "$CHILD_ATTEMPT" -eq 0
-  check "the app showed attach or unknown-port handling" test "$ATTACH_COPY" -eq 1
+  check "no app-hosted child was started" test "$CHILD_ATTEMPT" -eq 0
+  check "the app showed unknown-port handling" test "$ATTACH_COPY" -eq 1
 else
-  COMPETED=0
-  if [ "$AFTER_PIDS" != "$BEFORE_PIDS" ] || [ "$AFTER_COUNT" -gt "$BEFORE_COUNT" ]; then COMPETED=1; fi
-  if [ "$AFTER_GW_PROCS" -gt "$BEFORE_GW_PROCS" ]; then COMPETED=1; fi
-  if [ "$CHILD_ATTEMPT" -eq 1 ]; then COMPETED=1; fi
-  say "LISTENER_CHANGED=$([ "$AFTER_PIDS" != "$BEFORE_PIDS" ] && echo 1 || echo 0)"
-  check "base attempted a competing child start" test "$COMPETED" -eq 1
+  # Base folds the failed probe into "free", so it starts a child on that port.
+  CHILD_STARTED=0
+  [ "$AFTER_COUNT" -ge 1 ] && CHILD_STARTED=1
+  [ "$AFTER_GW_PROCS" -gt "$BEFORE_GW_PROCS" ] && CHILD_STARTED=1
+  [ "$CHILD_ATTEMPT" -eq 1 ] && CHILD_STARTED=1
+  say "CHILD_STARTED=$CHILD_STARTED"
+  check "base started a child on the unreadable idle port" test "$CHILD_STARTED" -eq 1
 fi
 
 stop_app
