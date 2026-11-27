@@ -133,8 +133,13 @@ grep -E "Installs and starts automatically|Could not check whether port|is free|
 # value", so OCR of the window is the record. It is sampled repeatedly because the
 # probe runs on its own deadline and the row updates when it lands.
 final_ocr="$OUT/ocr-$LABEL-connection.txt"
+normalized="$OUT/ocr-$LABEL-normalized.txt"
 : > "$final_ocr"
-COPY_PATTERN="installs and starts automatically|could not check whether port|already in use|existing gateway detected"
+: > "$normalized"
+# Vision occasionally substitutes look-alike letters ("automatıcally"), so every
+# match below runs against a lowercase ASCII fold of the same text.
+fold_ocr() { iconv -f UTF-8 -t ASCII//TRANSLIT "$1" 2>/dev/null || cat "$1"; }
+COPY_PATTERN="installs and starts|could not check whether port|already in use|existing gateway detected"
 for poll in $(seq 1 10); do
   WID=$(swift "$PROBE_DIR/window-id.swift" OpenClaw 2>/dev/null | head -1)
   shot="$OUT/window-$LABEL-connection.png"
@@ -145,7 +150,8 @@ for poll in $(seq 1 10); do
   fi
   [ -s "$shot" ] || continue
   swift "$PROBE_DIR/ocr-window.swift" "$shot" > "$final_ocr" 2>&1 || true
-  match=$(grep -iE "$COPY_PATTERN" "$final_ocr" | head -1)
+  fold_ocr "$final_ocr" | tr 'A-Z' 'a-z' > "$normalized"
+  match=$(grep -E "$COPY_PATTERN" "$normalized" | head -1)
   echo "poll $poll ($(basename "$shot")): ${match:-<no row copy yet>}"
   if [ -n "$match" ]; then
     break
@@ -154,6 +160,8 @@ for poll in $(seq 1 10); do
 done
 echo "--- OCR lines: $(wc -l < "$final_ocr" | tr -d ' ') ---"
 head -15 "$final_ocr" || true
+echo "--- folded text ---"
+head -15 "$normalized" || true
 
 echo "--- stub invocations by the app ---"
 echo "STUB_CALLS=$(wc -l < "$CALLS" | tr -d ' ')"

@@ -121,10 +121,10 @@ jobs:
           set -uo pipefail
           fail=0
           check() { local l="$1"; shift; if "$@"; then echo "PASS: $l"; else echo "FAIL: $l"; fail=1; fi; }
-          UNKNOWN="Could not check whether port"
-          DEFAULT_COPY="Installs and starts automatically"
-          BROKEN="/tmp/capture/ax-head-broken-connection.txt /tmp/capture/ocr-head-broken-connection.txt"
-          FREE="/tmp/capture/ax-head-free-connection.txt /tmp/capture/ocr-head-free-connection.txt"
+          UNKNOWN="could not check whether port"
+          DEFAULT_COPY="installs and starts"
+          BROKEN="/tmp/capture/ocr-head-broken-normalized.txt /tmp/capture/ax-head-broken-connection.txt"
+          FREE="/tmp/capture/ocr-head-free-normalized.txt /tmp/capture/ax-head-free-connection.txt"
           copy_has() { grep -qiE "$1" $2 2>/dev/null; }
           copy_lacks() { ! grep -qiE "$1" $2 2>/dev/null; }
           echo "--- sources ---"
@@ -160,6 +160,7 @@ jobs:
           name: onboarding-head
           path: |
             /tmp/capture/ax-*.txt
+            /tmp/capture/ocr-*.txt
             /tmp/capture/*.png
             /tmp/capture/poison-*
             /tmp/capture-head-*.log
@@ -256,15 +257,15 @@ jobs:
           set -uo pipefail
           fail=0
           check() { local l="$1"; shift; if "$@"; then echo "PASS: $l"; else echo "FAIL: $l"; fail=1; fi; }
-          SRC="/tmp/capture/ax-base-broken-connection.txt /tmp/capture/ocr-base-broken-connection.txt"
+          SRC="/tmp/capture/ocr-base-broken-normalized.txt /tmp/capture/ax-base-broken-connection.txt"
           copy_has() { grep -qiE "$1" $2 2>/dev/null; }
           copy_lacks() { ! grep -qiE "$1" $2 2>/dev/null; }
           for f in $SRC; do echo "$f: $(wc -l < "$f" 2>/dev/null || echo 0) lines"; done
           check "base app reached the probe stub" test -s /tmp/capture/poison-base-broken/calls.log
           check "base promises an automatic install despite the failed probe" \
-            copy_has "Installs and starts automatically" "$SRC"
+            copy_has "installs and starts" "$SRC"
           check "base never says the port could not be checked" \
-            copy_lacks "Could not check whether port" "$SRC"
+            copy_lacks "could not check whether port" "$SRC"
           echo "BASE_FAIL=$fail"
           exit "$fail"
 
@@ -281,6 +282,7 @@ jobs:
           name: onboarding-base
           path: |
             /tmp/capture/ax-*.txt
+            /tmp/capture/ocr-*.txt
             /tmp/capture/*.png
             /tmp/capture/poison-*
             /tmp/capture-base-broken.log
