@@ -36,6 +36,7 @@ env:
   PR_HEAD: 8ba0147560166a6ef593892719f3ef09605db2a6
   PR_BRANCH: fix/macos-portguardian-inconclusive-190152
   BASE: c44c610d32627fc2a5d3de483a52d51c3d771e43
+  PR_BASE: 19a42c4323c1c67578323446f599ff4e54115772
   OLD_TAG: v2026.11.10
   GATEWAY_PORT: '18789'
   BUNDLE_ID: ai.openclaw.mac
@@ -595,15 +596,17 @@ jobs:
         timeout-minutes: 20
         run: pnpm plugins:assets:build
 
-      - name: Restore PR production files to c44c610 (base mode)
+      - name: Restore PR production files to the PR merge base (base mode)
         working-directory: openclaw
         run: |
           set -euo pipefail
-          BASE=c44c610d32627fc2a5d3de483a52d51c3d771e43
-          git fetch --no-tags --depth=1 https://github.com/openclaw/openclaw.git "$BASE"
-          echo "BASE_COMMIT=$(git rev-parse "$BASE")" | tee -a "$GITHUB_STEP_SUMMARY"
-          # Tests stay at the PR head; only production files go back to base.
-          git checkout "$BASE" -- \
+          # The PR was forked from 19a42c; using current main would pull in
+          # unrelated changes and produce a red that says nothing about this fix.
+          PR_BASE=19a42c4323c1c67578323446f599ff4e54115772
+          git fetch --no-tags --depth=1 https://github.com/openclaw/openclaw.git "$PR_BASE"
+          echo "PR_BASE_COMMIT=$(git rev-parse "$PR_BASE")" | tee -a "$GITHUB_STEP_SUMMARY"
+          # Tests stay at the PR head; only production files go back to the PR base.
+          git checkout "$PR_BASE" -- \
             apps/macos/Sources/OpenClaw/GatewayProcessManager+Hosting.swift \
             apps/macos/Sources/OpenClaw/GatewayProcessManager.swift \
             apps/macos/Sources/OpenClaw/ManagedNodeGatewayMigration.swift \
@@ -611,7 +614,7 @@ jobs:
             apps/macos/Sources/OpenClaw/OnboardingView+Monitoring.swift \
             apps/macos/Sources/OpenClaw/PortGuardian.swift
           echo "--- reverted production files ---"
-          git diff --name-only "$BASE" -- apps/macos/Sources/OpenClaw/ | head -20 || true
+          git diff --name-only "$PR_BASE" -- apps/macos/Sources/OpenClaw/ | head -20 || true
 
       - name: Run the two Swift suites (expect red)
         working-directory: openclaw
@@ -631,7 +634,7 @@ jobs:
           }
           say "==== regression base (production files reverted, tests at PR head) ===="
           say "HEAD_COMMIT=$(git rev-parse HEAD)"
-          say "BASE_COMMIT=$(git rev-parse c44c610d32627fc2a5d3de483a52d51c3d771e43)"
+          say "PR_BASE_COMMIT=$(git rev-parse 19a42c4323c1c67578323446f599ff4e54115772)"
           set +e
           swift test --package-path apps/macos --filter PortGuardianDiagnosticsTests \
             2>&1 | tee "$OUT_DIR/portguardian.log"
