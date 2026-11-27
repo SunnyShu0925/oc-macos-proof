@@ -398,6 +398,9 @@ jobs:
             "$O/verdict.log" 2>/dev/null || true
           echo "===== candidate gateway status (safe lines) ====="
           grep -iE 'Port |Listening|running|service|resume' "$O/gateway-status-after.log" 2>/dev/null | head -12 || true
+          echo "===== old CLI install (safe lines, redacted) ====="
+          tail -15 "$O/install-old.log" 2>/dev/null \
+            | sed -E 's/(token|apiKey|api_key|secret|password)[^,}]*/\1=<redacted>/Ig' || true
           echo "===== old pause log (safe lines, redacted) ====="
           grep -iE 'resume|retain|pause|stop|service' "$O/old-app-pause.log" 2>/dev/null \
             | sed -E 's/(token|apiKey|api_key|secret|password)[^,}]*/\1=<redacted>/Ig' | tail -20 || true
