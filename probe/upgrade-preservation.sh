@@ -72,8 +72,6 @@ head -25 "$OUT/plist-before.txt"
 echo "--- old runtime intent ---"
 "$OLD_RT/bin/bun" "$OLD_MJS" gateway status --runtime-intent-only --json > "$OUT/intent-old.json" 2>&1
 head -3 "$OUT/intent-old.json"
-BEFORE_REV=$(head -3 "$OUT/intent-old.json" | grep -oE '"revision": *"[^"]*"' | head -1)
-echo "INTENT_REV_BEFORE=${BEFORE_REV:-<none>}"
 echo "--- resume command record before the upgrade ---"
 echo "RESUME_BEFORE=$(defaults read "$BUNDLE_ID" gatewayNodeResumeCommand 2>/dev/null || echo ABSENT)"
 echo "--- a gateway is really up on the old build ---"
@@ -86,8 +84,6 @@ echo "NEW_BUN=$("$NEW_RT/bin/bun" --version 2>&1)"
 echo "--- new runtime intent ---"
 "$NEW_RT/bin/bun" "$NEW_MJS" gateway status --runtime-intent-only --json > "$OUT/intent-new.json" 2>&1
 head -3 "$OUT/intent-new.json"
-AFTER_REV=$(head -3 "$OUT/intent-new.json" | grep -oE '"revision": *"[^"]*"' | head -1)
-echo "INTENT_REV_AFTER=${AFTER_REV:-<none>}"
 echo "--- new status ---"
 "$NEW_RT/bin/bun" "$NEW_MJS" status --json > "$OUT/status-new.json" 2>&1
 head -3 "$OUT/status-new.json"
@@ -103,6 +99,36 @@ cp "$PLIST" "$OUT/plist-after.plist"
 plutil -p "$PLIST" > "$OUT/plist-after.txt" 2>&1
 echo "RESUME_AFTER=$(defaults read "$BUNDLE_ID" gatewayNodeResumeCommand 2>/dev/null || echo ABSENT)"
 
+# The two CLIs report their own version and entrypoint, so only the service
+# subtree is compared: that is the part the upgrade must leave untouched.
+cat > "$OUT/intent-compare.py" <<'PY'
+import json
+import sys
+
+
+def service(path):
+    with open(path) as handle:
+        return json.load(handle).get("service", {})
+
+
+before = service(sys.argv[1])
+after = service(sys.argv[2])
+intent_before = before.get("runtimeIntent") or {}
+intent_after = after.get("runtimeIntent") or {}
+print("INTENT_STATUS_BEFORE=" + str(intent_before.get("status")))
+print("INTENT_STORED_BEFORE=" + str(intent_before.get("stored")))
+print("INTENT_REVISION_BEFORE=" + str(intent_before.get("revision")))
+print("INTENT_DEFINITION_BEFORE=" + str(intent_before.get("definition")))
+print("INTENT_PIN_PATH_BEFORE=" + str((intent_before.get("pin") or {}).get("path")))
+print("INTENT_REVISION_AFTER=" + str(intent_after.get("revision")))
+print("SERVICE_INTENT_EQUAL=" + ("1" if before == after else "0"))
+PY
+python3 "$OUT/intent-compare.py" "$OUT/intent-old.json" "$OUT/intent-new.json" \
+  | tee "$OUT/intent-compare.txt"
+INTENT_COMPARE=$(cat "$OUT/intent-compare.txt")
+BEFORE_REV=$(echo "$INTENT_COMPARE" | grep '^INTENT_REVISION_BEFORE=' | cut -d= -f2-)
+AFTER_REV=$(echo "$INTENT_COMPARE" | grep '^INTENT_REVISION_AFTER=' | cut -d= -f2-)
+
 echo "==== verdict ===="
 check "the old build installed the LaunchAgent" test -f "$OUT/plist-before.plist"
 check "the old build reported success" test "$OLD_EXIT" = "0"
@@ -111,11 +137,15 @@ check "LaunchAgent still declares program arguments" grep -q "ProgramArguments" 
 check "LaunchAgent still points at the runtime the old build installed" \
   grep -qF "$OLD_RT" "$OUT/plist-after.txt"
 check "the old build recorded a runtime pin" \
-  grep -Eq '"revision": *"[^"]+"' "$OUT/intent-old.json"
+  grep -q '^INTENT_STATUS_BEFORE=known' <<<"$INTENT_COMPARE"
+check "the old build stored that pin" grep -q '^INTENT_STORED_BEFORE=True' <<<"$INTENT_COMPARE"
+check "the pin names the runtime the old build installed" \
+  grep -qF "INTENT_PIN_PATH_BEFORE=$OLD_RT/bin/bun" <<<"$INTENT_COMPARE"
 check "the pin store is byte-identical after the candidate ran" test "$DB_BEFORE" = "$DB_AFTER"
-PIN_MATCH=0
-if [ -n "$BEFORE_REV" ] && [ "$AFTER_REV" = "$BEFORE_REV" ]; then PIN_MATCH=1; fi
-check "the candidate reads the pin the old build wrote" test "$PIN_MATCH" = "1"
+check "the candidate reports the same service intent" \
+  grep -q '^SERVICE_INTENT_EQUAL=1' <<<"$INTENT_COMPARE"
+check "the candidate reads the same pin revision" \
+  test -n "${BEFORE_REV:-}" -a "${AFTER_REV:-x}" = "${BEFORE_REV:-y}"
 check "candidate gateway status did not report a broken service" \
   bash -c "! grep -qiE 'not installed|missing plist|corrupt' '$OUT/gateway-status-new.log'"
 
