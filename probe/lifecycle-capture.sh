@@ -47,6 +47,17 @@ check() {
 }
 
 # The real binary, always outside the poisoned PATH. -Fp prints only p<pid>.
+app_pids() { pgrep -f "OpenClaw.app/Contents/MacOS/OpenClaw" 2>/dev/null | tr '\n' ' '; }
+stop_app() {
+  local pids
+  pids=$(app_pids)
+  if [ -n "$pids" ]; then kill -9 $pids >/dev/null 2>&1 || true; fi
+  for _ in $(seq 1 20); do
+    [ -z "$(app_pids)" ] && break
+    sleep 1
+  done
+  rm -f "/tmp/openclaw-$(id -u)-app-instances/ai.openclaw.mac.lock" >/dev/null 2>&1 || true
+}
 real_listeners() {
   "$REAL_LSOF" -nP -iTCP:"$PORT" -sTCP:LISTEN -Fp 2>/dev/null \
     | sed -n 's/^p//p' | sort -u
@@ -57,8 +68,22 @@ gateway_run_procs() {
     | grep -F "$MJS gateway run" | grep -v 'grep -F' | grep -c . || true
 }
 app_procs() { pgrep -f "OpenClaw.app/Contents/MacOS/OpenClaw" | grep -c . || true; }
-stop_app() { pkill -f "OpenClaw.app/Contents/MacOS/OpenClaw" >/dev/null 2>&1 || true; }
-stop_gateways() { pkill -f "$MJS gateway run" >/dev/null 2>&1 || true; }
+stop_gateways() { pkill -9 -f "$MJS gateway run" >/dev/null 2>&1 || true; }
+
+# Keep a stuck Accessibility query or unified-log dump from consuming the whole
+# job. Every bounded command is still run directly; only its wall clock is capped.
+run_limited() {
+  local seconds="$1"; shift
+  "$@" &
+  local cmd_pid=$!
+  ( sleep "$seconds"; kill -9 "$cmd_pid" >/dev/null 2>&1 || true ) &
+  local watchdog=$!
+  wait "$cmd_pid" 2>/dev/null
+  local rc=$?
+  kill "$watchdog" >/dev/null 2>&1 || true
+  wait "$watchdog" >/dev/null 2>&1 || true
+  return "$rc"
+}
 
 say "==== lifecycle label=$LABEL mode=$MODE ===="
 say "APP=$APP"
@@ -147,12 +172,12 @@ say "--- inherited PATH of the app ---"
 ps eww -p "$APP_PID" 2>/dev/null | tr ' ' '\n' | grep -E '^PATH=' || echo "PATH_NOT_VISIBLE"
 
 say "--- AX tree before restart ---"
-osascript "$PROBE_DIR/ax-all.applescript" > "$OUT/ax-before.txt" 2>&1 || true
+run_limited 90 osascript "$PROBE_DIR/ax-all.applescript" > "$OUT/ax-before.txt" 2>&1 || true
 grep -vE 'missing value|^WINDOW_COUNT|^ELEMENTS|^===' "$OUT/ax-before.txt" | head -20 || true
 
 # ------------------------------------ AX click Debug -> Restart Gateway (real)
 say "--- AX click Debug -> Restart Gateway ---"
-osascript "$PROBE_DIR/restart-gateway.applescript" > "$OUT/menu.log" 2>&1 || true
+run_limited 120 osascript "$PROBE_DIR/restart-gateway.applescript" > "$OUT/menu.log" 2>&1 || true
 cat "$OUT/menu.log"
 
 # The attach readiness probe can take up to 6.5s and a failed child may retry.
@@ -178,12 +203,12 @@ say "--- stub calls by the app (raw) ---"
 cat "$CALLS"
 
 say "--- AX tree after restart ---"
-osascript "$PROBE_DIR/ax-all.applescript" > "$OUT/ax-after.txt" 2>&1 || true
+run_limited 90 osascript "$PROBE_DIR/ax-all.applescript" > "$OUT/ax-after.txt" 2>&1 || true
 grep -vE 'missing value|^WINDOW_COUNT|^ELEMENTS|^===' "$OUT/ax-after.txt" | head -40 || true
 
 say "--- unified log matches (raw) ---"
-log show --last 10m --info --debug --style compact \
-  --predicate 'process == "OpenClaw" OR subsystem == "ai.openclaw"' \
+run_limited 120 log show --last 10m --style compact \
+  --predicate 'process == "OpenClaw" AND (eventMessage CONTAINS[c] "gateway" OR eventMessage CONTAINS[c] "attach" OR eventMessage CONTAINS[c] "port" OR eventMessage CONTAINS[c] "child")' \
   > "$OUT/oslog.txt" 2>&1 || true
 grep -iE 'using existing instance|Could not inspect port|Could not determine whether port|retry in a moment|five failed starts|childSupervisor|child exited|gateway child launch|attach' \
   "$OUT/oslog.txt" | tail -40 || true
