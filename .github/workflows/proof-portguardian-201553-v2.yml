@@ -1,0 +1,667 @@
+name: proof-portguardian-201553-v2
+
+# Evidence for openclaw/openclaw PR #201553 - the two ClawSweeper blockers:
+#   1. lifecycle: an unreadable Gateway port must attach, never spawn a child
+#   2. upgrade: an old app's own Pause resume record must survive the candidate
+#   3. regression: the production fix is what makes the new tests green
+# Everything runs on hosted macos-26 (no Xcode on the local machine). Logs are
+# printed inline in the GHA log; artifacts are a secondary convenience.
+'on':
+  workflow_dispatch:
+    inputs:
+      run:
+        description: which evidence to produce (all runs every job)
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - lifecycle
+          - upgrade
+          - regression
+      mode:
+        description: head or base (filters lifecycle/regression when run != all)
+        required: true
+        default: head
+        type: choice
+        options:
+          - head
+          - base
+
+permissions:
+  contents: read
+
+env:
+  FORK: SunnyShu0925/openclaw
+  PR_HEAD: 8ba0147560166a6ef593892719f3ef09605db2a6
+  PR_BRANCH: fix/macos-portguardian-inconclusive-190152
+  BASE: c44c610d32627fc2a5d3de483a52d51c3d771e43
+  OLD_TAG: v2026.11.10
+  GATEWAY_PORT: '18789'
+  BUNDLE_ID: ai.openclaw.mac
+
+jobs:
+  # ================================================================ lifecycle
+  lifecycle-head:
+    name: lifecycle-head
+    if: ${{ inputs.run == 'all' || (inputs.run == 'lifecycle' && inputs.mode == 'head') }}
+    runs-on: macos-26
+    timeout-minutes: 180
+    steps:
+      - name: Checkout PR head (candidate)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: 8ba0147560166a6ef593892719f3ef09605db2a6
+          path: openclaw
+
+      - name: Checkout proof tooling
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: main
+          path: proofrepo
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version || true
+          swift --version || true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        working-directory: openclaw
+        timeout-minutes: 25
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Prepare Apple Mermaid assets
+        working-directory: openclaw
+        run: node scripts/prepare-apple-mermaid.mjs
+
+      - name: Patch unrelated ChatUI build break
+        working-directory: openclaw
+        run: |
+          set -euo pipefail
+          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
+          FILE=apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaVideoAttachment.swift
+          python3 - "$FILE" <<'PY'
+          import sys
+          path = sys.argv[1]
+          src = open(path).read()
+          old = "                    VideoPlayer(player: player.player)"
+          new = "                    Color.black"
+          if old in src:
+              open(path, "w").write(src.replace(old, new, 1))
+              print("patched the unrelated ChatUI break")
+          else:
+              print("no ChatUI break on this tree")
+          PY
+          git diff --stat
+
+      - name: Build plugin assets
+        working-directory: openclaw
+        timeout-minutes: 20
+        run: pnpm plugins:assets:build
+
+      - name: Package the app (ad-hoc)
+        working-directory: openclaw
+        timeout-minutes: 80
+        env:
+          ALLOW_ADHOC_SIGNING: '1'
+          SIGN_IDENTITY: '-'
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.openclaw"
+          touch "$HOME/.openclaw/disable-launchagent"
+          ./scripts/package-mac-app.sh 2>&1 | tail -120
+          test -x dist/OpenClaw.app/Contents/MacOS/OpenClaw
+          ls -la dist/OpenClaw.app/Contents/MacOS/ || true
+
+      - name: Capture lifecycle (broken lsof + AX Restart Gateway)
+        working-directory: openclaw
+        env:
+          APP_PATH: ${{ github.workspace }}/openclaw/dist/OpenClaw.app
+          OUT_DIR: /tmp/pg201553/lifecycle-head
+          PROBE_DIR: ${{ github.workspace }}/proofrepo/probe
+          OPENCLAW_DIR: ${{ github.workspace }}/openclaw
+          GATEWAY_PORT: '18789'
+          BUNDLE_ID: ai.openclaw.mac
+        run: |
+          set -o pipefail
+          bash "$PROBE_DIR/lifecycle-capture.sh" lifecycle-head head 2>&1 \
+            | tee "$OUT_DIR/capture.log"
+          rc=${PIPESTATUS[0]}
+          echo "CAPTURE_RC=$rc"
+          exit "$rc"
+
+      - name: Show inline raw lifecycle evidence
+        if: always()
+        run: |
+          O=/tmp/pg201553/lifecycle-head
+          echo "===== $O/verdict.log ====="; cat "$O/verdict.log" 2>/dev/null || true
+          echo "===== stub calls.log ====="; cat "$O/poison/calls.log" 2>/dev/null || true
+          echo "===== listener ps before ====="; cat "$O/listeners-before.ps" 2>/dev/null || true
+          echo "===== listener ps after ====="; cat "$O/listeners-after.ps" 2>/dev/null || true
+          echo "===== AX menu log ====="; cat "$O/menu.log" 2>/dev/null || true
+          echo "===== unified-log matches ====="
+          grep -iE 'using existing instance|using existing gateway|Failed: Could not|Could not inspect port|Could not determine whether port|retry in a moment|five failed starts|childSupervisor|child exited|gateway child launch|attach' \
+            "$O/oslog.txt" 2>/dev/null | tail -30 || true
+          echo "===== gateway child log (raw tail) ====="
+          tail -40 "$O/logs/openclaw-gateway.log" 2>/dev/null || true
+
+      - name: Upload lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg201553-lifecycle-head
+          path: /tmp/pg201553/lifecycle-head/
+
+  lifecycle-base:
+    name: lifecycle-base
+    if: ${{ inputs.run == 'all' || (inputs.run == 'lifecycle' && inputs.mode == 'base') }}
+    runs-on: macos-26
+    timeout-minutes: 180
+    steps:
+      - name: Checkout upstream base commit
+        uses: actions/checkout@v4
+        with:
+          repository: openclaw/openclaw
+          ref: c44c610d32627fc2a5d3de483a52d51c3d771e43
+          path: openclaw
+
+      - name: Checkout proof tooling
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: main
+          path: proofrepo
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version || true
+          swift --version || true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        working-directory: openclaw
+        timeout-minutes: 25
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Prepare Apple Mermaid assets
+        working-directory: openclaw
+        run: node scripts/prepare-apple-mermaid.mjs
+
+      - name: Patch unrelated ChatUI build break
+        working-directory: openclaw
+        run: |
+          set -euo pipefail
+          echo "BASE_COMMIT=$(git rev-parse HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "=== the conflating guard on this base ==="
+          grep -n "guard res.ok" apps/macos/Sources/OpenClaw/PortGuardian.swift || true
+          FILE=apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaVideoAttachment.swift
+          python3 - "$FILE" <<'PY'
+          import sys
+          path = sys.argv[1]
+          src = open(path).read()
+          old = "                    VideoPlayer(player: player.player)"
+          new = "                    Color.black"
+          if old in src:
+              open(path, "w").write(src.replace(old, new, 1))
+              print("patched the unrelated ChatUI break")
+          else:
+              print("no ChatUI break on this tree")
+          PY
+          git diff --stat
+
+      - name: Build plugin assets
+        working-directory: openclaw
+        timeout-minutes: 20
+        run: pnpm plugins:assets:build
+
+      - name: Package the app (ad-hoc)
+        working-directory: openclaw
+        timeout-minutes: 80
+        env:
+          ALLOW_ADHOC_SIGNING: '1'
+          SIGN_IDENTITY: '-'
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.openclaw"
+          touch "$HOME/.openclaw/disable-launchagent"
+          ./scripts/package-mac-app.sh 2>&1 | tail -120
+          test -x dist/OpenClaw.app/Contents/MacOS/OpenClaw
+          ls -la dist/OpenClaw.app/Contents/MacOS/ || true
+
+      - name: Capture lifecycle (broken lsof + AX Restart Gateway)
+        working-directory: openclaw
+        env:
+          APP_PATH: ${{ github.workspace }}/openclaw/dist/OpenClaw.app
+          OUT_DIR: /tmp/pg201553/lifecycle-base
+          PROBE_DIR: ${{ github.workspace }}/proofrepo/probe
+          OPENCLAW_DIR: ${{ github.workspace }}/openclaw
+          GATEWAY_PORT: '18789'
+          BUNDLE_ID: ai.openclaw.mac
+        run: |
+          set -o pipefail
+          bash "$PROBE_DIR/lifecycle-capture.sh" lifecycle-base base 2>&1 \
+            | tee "$OUT_DIR/capture.log"
+          rc=${PIPESTATUS[0]}
+          echo "CAPTURE_RC=$rc"
+          exit "$rc"
+
+      - name: Show inline raw lifecycle evidence
+        if: always()
+        run: |
+          O=/tmp/pg201553/lifecycle-base
+          echo "===== $O/verdict.log ====="; cat "$O/verdict.log" 2>/dev/null || true
+          echo "===== stub calls.log ====="; cat "$O/poison/calls.log" 2>/dev/null || true
+          echo "===== listener ps before ====="; cat "$O/listeners-before.ps" 2>/dev/null || true
+          echo "===== listener ps after ====="; cat "$O/listeners-after.ps" 2>/dev/null || true
+          echo "===== AX menu log ====="; cat "$O/menu.log" 2>/dev/null || true
+          echo "===== unified-log matches ====="
+          grep -iE 'using existing instance|using existing gateway|Failed: Could not|Could not inspect port|Could not determine whether port|retry in a moment|five failed starts|childSupervisor|child exited|gateway child launch|attach' \
+            "$O/oslog.txt" 2>/dev/null | tail -30 || true
+          echo "===== gateway child log (raw tail) ====="
+          tail -40 "$O/logs/openclaw-gateway.log" 2>/dev/null || true
+
+      - name: Upload lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg201553-lifecycle-base
+          path: /tmp/pg201553/lifecycle-base/
+
+  # ================================================================== upgrade
+  upgrade:
+    name: upgrade-old-app-resume
+    if: ${{ inputs.run == 'all' || inputs.run == 'upgrade' }}
+    runs-on: macos-26
+    timeout-minutes: 180
+    steps:
+      - name: Checkout old stable app (v2026.11.10)
+        uses: actions/checkout@v4
+        with:
+          repository: openclaw/openclaw
+          ref: v2026.11.10
+          path: old
+
+      - name: Checkout PR head (candidate)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: 8ba0147560166a6ef593892719f3ef09605db2a6
+          path: new
+
+      - name: Checkout proof tooling
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: main
+          path: proofrepo
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version || true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Package the old stable app
+        timeout-minutes: 85
+        env:
+          ALLOW_ADHOC_SIGNING: '1'
+          SIGN_IDENTITY: '-'
+        run: |
+          set -euo pipefail
+          cd old
+          corepack enable
+          pnpm install --frozen-lockfile --config.node-linker=hoisted
+          node scripts/prepare-apple-mermaid.mjs || true
+          pnpm plugins:assets:build || true
+          mkdir -p "$HOME/.openclaw"
+          touch "$HOME/.openclaw/disable-launchagent"
+          ./scripts/package-mac-app.sh 2>&1 | tail -120
+          test -x dist/OpenClaw.app/Contents/MacOS/OpenClaw
+          ls -la dist/OpenClaw.app/Contents/Resources/runtime/bin/ || true
+
+      - name: Package the candidate app
+        timeout-minutes: 85
+        env:
+          ALLOW_ADHOC_SIGNING: '1'
+          SIGN_IDENTITY: '-'
+        run: |
+          set -euo pipefail
+          cd new
+          corepack enable
+          pnpm install --frozen-lockfile
+          node scripts/prepare-apple-mermaid.mjs
+          FILE=apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaVideoAttachment.swift
+          python3 - "$FILE" <<'PY'
+          import sys
+          path = sys.argv[1]
+          src = open(path).read()
+          old_line = "                    VideoPlayer(player: player.player)"
+          new_line = "                    Color.black"
+          if old_line in src:
+              open(path, "w").write(src.replace(old_line, new_line, 1))
+              print("patched the unrelated ChatUI break")
+          else:
+              print("no ChatUI break on this tree")
+          PY
+          pnpm plugins:assets:build
+          mkdir -p "$HOME/.openclaw"
+          ./scripts/package-mac-app.sh 2>&1 | tail -120
+          test -x dist/OpenClaw.app/Contents/MacOS/OpenClaw
+          ls -la dist/OpenClaw.app/Contents/Resources/runtime/bin/ || true
+
+      - name: Run the real old-app -> candidate upgrade and resume
+        env:
+          OUT_DIR: /tmp/pg201553/upgrade
+          PROBE_DIR: ${{ github.workspace }}/proofrepo/probe
+          OLD_APP_PATH: ${{ github.workspace }}/old/dist/OpenClaw.app
+          NEW_APP_PATH: ${{ github.workspace }}/new/dist/OpenClaw.app
+          GATEWAY_PORT: '18789'
+          BUNDLE_ID: ai.openclaw.mac
+        run: |
+          set -o pipefail
+          bash "$PROBE_DIR/upgrade-app-resume.sh" 2>&1 | tee "$OUT_DIR/capture.log"
+          rc=${PIPESTATUS[0]}
+          echo "CAPTURE_RC=$rc"
+          exit "$rc"
+
+      - name: Show inline raw upgrade evidence
+        if: always()
+        run: |
+          O=/tmp/pg201553/upgrade
+          echo "===== $O/verdict.log ====="; cat "$O/verdict.log" 2>/dev/null || true
+          echo "===== stub calls.log ====="; cat "$O/poison/calls.log" 2>/dev/null || true
+          echo "===== intent compare ====="; cat "$O/intent-compare.txt" 2>/dev/null || true
+          echo "===== storage SHAs / resume (redacted in verdict) ====="
+          grep -E 'PLIST_SHA|PIN_DB_SHA|CONFIG_SHA|RESUME_|INTENT_|LISTENER_|OLD_SERVICE_|PROOF_FAIL|PASS:|FAIL:' \
+            "$O/verdict.log" 2>/dev/null || true
+          echo "===== candidate gateway status (safe lines) ====="
+          grep -iE 'Port |Listening|running|service|resume' "$O/gateway-status-after.log" 2>/dev/null | head -12 || true
+          echo "===== old pause log (safe lines, redacted) ====="
+          grep -iE 'resume|retain|pause|stop|service' "$O/old-app-pause.log" 2>/dev/null \
+            | sed -E 's/(token|apiKey|api_key|secret|password)[^,}]*/\1=<redacted>/Ig' | tail -20 || true
+          echo "===== old resume log (safe lines, redacted) ====="
+          grep -iE 'resume|retain|pause|service|install' "$O/old-app-resume.log" 2>/dev/null \
+            | sed -E 's/(token|apiKey|api_key|secret|password)[^,}]*/\1=<redacted>/Ig' | tail -20 || true
+
+      - name: Upload upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg201553-upgrade
+          path: /tmp/pg201553/upgrade/
+
+  # ================================================================ regression
+  regression-head:
+    name: regression-head
+    if: ${{ inputs.run == 'all' || (inputs.run == 'regression' && inputs.mode == 'head') }}
+    runs-on: macos-26
+    timeout-minutes: 180
+    steps:
+      - name: Checkout PR head (tests and production both at the PR)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: 8ba0147560166a6ef593892719f3ef09605db2a6
+          path: openclaw
+          fetch-depth: 0
+
+      - name: Checkout proof tooling
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: main
+          path: proofrepo
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          swift --version
+          xcodebuild -version || true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        working-directory: openclaw
+        timeout-minutes: 25
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Prepare Apple Mermaid assets
+        working-directory: openclaw
+        run: node scripts/prepare-apple-mermaid.mjs
+
+      - name: Patch unrelated ChatUI build break
+        working-directory: openclaw
+        run: |
+          set -euo pipefail
+          FILE=apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaVideoAttachment.swift
+          python3 - "$FILE" <<'PY'
+          import sys
+          path = sys.argv[1]
+          src = open(path).read()
+          old = "                    VideoPlayer(player: player.player)"
+          new = "                    Color.black"
+          if old in src:
+              open(path, "w").write(src.replace(old, new, 1))
+              print("patched the unrelated ChatUI break")
+          else:
+              print("no ChatUI break on this tree")
+          PY
+
+      - name: Build plugin assets
+        working-directory: openclaw
+        timeout-minutes: 20
+        run: pnpm plugins:assets:build
+
+      - name: Run the two Swift suites (expect green)
+        working-directory: openclaw
+        timeout-minutes: 120
+        env:
+          OUT_DIR: /tmp/pg201553/regression-head
+        run: |
+          set -uo pipefail
+          mkdir -p "$OUT_DIR"
+          STATUS="$OUT_DIR/verdict.log"
+          : > "$STATUS"
+          say() { echo "$@" | tee -a "$STATUS"; }
+          fail=0
+          check() {
+            local label="$1"; shift
+            if "$@"; then say "PASS: $label"; else say "FAIL: $label"; fail=1; fi
+          }
+          say "==== regression head ===="
+          say "HEAD_COMMIT=$(git rev-parse HEAD)"
+          say "TEST_SOURCE=apps/macos/Tests/OpenClawIPCTests (from the PR head)"
+          set +e
+          swift test --package-path apps/macos --filter PortGuardianDiagnosticsTests \
+            2>&1 | tee "$OUT_DIR/portguardian.log"
+          RC1=${PIPESTATUS[0]}
+          swift test --package-path apps/macos --filter GatewayProcessManagerTests \
+            2>&1 | tee "$OUT_DIR/gatewaypm.log"
+          RC2=${PIPESTATUS[0]}
+          set -e
+          say "PORTGUARDIAN_RC=$RC1"
+          say "GATEWAYPM_RC=$RC2"
+          say "--- first errors (raw) ---"
+          grep -hE 'error:|failed|FAIL' "$OUT_DIR/portguardian.log" "$OUT_DIR/gatewaypm.log" 2>/dev/null | head -30 || true
+          check "PortGuardianDiagnosticsTests is green on the PR head" test "$RC1" -eq 0
+          check "GatewayProcessManagerTests is green on the PR head" test "$RC2" -eq 0
+          say "PROOF_FAIL=$fail"
+          exit "$fail"
+
+      - name: Show inline raw regression evidence
+        if: always()
+        run: |
+          O=/tmp/pg201553/regression-head
+          echo "===== $O/verdict.log ====="; cat "$O/verdict.log" 2>/dev/null || true
+          echo "===== PortGuardianDiagnosticsTests tail ====="; tail -40 "$O/portguardian.log" 2>/dev/null || true
+          echo "===== GatewayProcessManagerTests tail ====="; tail -40 "$O/gatewaypm.log" 2>/dev/null || true
+
+      - name: Upload regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg201553-regression-head
+          path: /tmp/pg201553/regression-head/
+
+  regression-base:
+    name: regression-base
+    if: ${{ inputs.run == 'all' || (inputs.run == 'regression' && inputs.mode == 'base') }}
+    runs-on: macos-26
+    timeout-minutes: 180
+    steps:
+      - name: Checkout PR head (tests always come from the PR)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: 8ba0147560166a6ef593892719f3ef09605db2a6
+          path: openclaw
+          fetch-depth: 0
+
+      - name: Checkout proof tooling
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: main
+          path: proofrepo
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          swift --version
+          xcodebuild -version || true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        working-directory: openclaw
+        timeout-minutes: 25
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Prepare Apple Mermaid assets
+        working-directory: openclaw
+        run: node scripts/prepare-apple-mermaid.mjs
+
+      - name: Patch unrelated ChatUI build break
+        working-directory: openclaw
+        run: |
+          set -euo pipefail
+          FILE=apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaVideoAttachment.swift
+          python3 - "$FILE" <<'PY'
+          import sys
+          path = sys.argv[1]
+          src = open(path).read()
+          old = "                    VideoPlayer(player: player.player)"
+          new = "                    Color.black"
+          if old in src:
+              open(path, "w").write(src.replace(old, new, 1))
+              print("patched the unrelated ChatUI break")
+          else:
+              print("no ChatUI break on this tree")
+          PY
+
+      - name: Build plugin assets
+        working-directory: openclaw
+        timeout-minutes: 20
+        run: pnpm plugins:assets:build
+
+      - name: Restore PR production files to c44c610 (base mode)
+        working-directory: openclaw
+        run: |
+          set -euo pipefail
+          BASE=c44c610d32627fc2a5d3de483a52d51c3d771e43
+          git fetch --no-tags --depth=1 https://github.com/openclaw/openclaw.git "$BASE"
+          echo "BASE_COMMIT=$(git rev-parse "$BASE")" | tee -a "$GITHUB_STEP_SUMMARY"
+          # Tests stay at the PR head; only production files go back to base.
+          git checkout "$BASE" -- \
+            apps/macos/Sources/OpenClaw/GatewayProcessManager+Hosting.swift \
+            apps/macos/Sources/OpenClaw/GatewayProcessManager.swift \
+            apps/macos/Sources/OpenClaw/ManagedNodeGatewayMigration.swift \
+            apps/macos/Sources/OpenClaw/Onboarding.swift \
+            apps/macos/Sources/OpenClaw/OnboardingView+Monitoring.swift \
+            apps/macos/Sources/OpenClaw/PortGuardian.swift
+          echo "--- reverted production files ---"
+          git diff --name-only "$BASE" -- apps/macos/Sources/OpenClaw/ | head -20 || true
+
+      - name: Run the two Swift suites (expect red)
+        working-directory: openclaw
+        timeout-minutes: 120
+        env:
+          OUT_DIR: /tmp/pg201553/regression-base
+        run: |
+          set -uo pipefail
+          mkdir -p "$OUT_DIR"
+          STATUS="$OUT_DIR/verdict.log"
+          : > "$STATUS"
+          say() { echo "$@" | tee -a "$STATUS"; }
+          fail=0
+          check() {
+            local label="$1"; shift
+            if "$@"; then say "PASS: $label"; else say "FAIL: $label"; fail=1; fi
+          }
+          say "==== regression base (production files reverted, tests at PR head) ===="
+          say "HEAD_COMMIT=$(git rev-parse HEAD)"
+          say "BASE_COMMIT=$(git rev-parse c44c610d32627fc2a5d3de483a52d51c3d771e43)"
+          set +e
+          swift test --package-path apps/macos --filter PortGuardianDiagnosticsTests \
+            2>&1 | tee "$OUT_DIR/portguardian.log"
+          RC1=${PIPESTATUS[0]}
+          swift test --package-path apps/macos --filter GatewayProcessManagerTests \
+            2>&1 | tee "$OUT_DIR/gatewaypm.log"
+          RC2=${PIPESTATUS[0]}
+          set -e
+          say "PORTGUARDIAN_RC=$RC1"
+          say "GATEWAYPM_RC=$RC2"
+          say "--- first compile/test errors (raw) ---"
+          grep -hE 'error:|failed|FAIL' "$OUT_DIR/portguardian.log" "$OUT_DIR/gatewaypm.log" 2>/dev/null | head -30 || true
+          RED=0
+          [ "$RC1" -ne 0 ] && RED=1
+          [ "$RC2" -ne 0 ] && RED=1
+          check "reverting the production fix makes the suites red" test "$RED" -eq 1
+          say "PROOF_FAIL=$fail"
+          exit "$fail"
+
+      - name: Show inline raw regression evidence
+        if: always()
+        run: |
+          O=/tmp/pg201553/regression-base
+          echo "===== $O/verdict.log ====="; cat "$O/verdict.log" 2>/dev/null || true
+          echo "===== PortGuardianDiagnosticsTests tail ====="; tail -40 "$O/portguardian.log" 2>/dev/null || true
+          echo "===== GatewayProcessManagerTests tail ====="; tail -40 "$O/gatewaypm.log" 2>/dev/null || true
+
+      - name: Upload regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg201553-regression-base
+          path: /tmp/pg201553/regression-base/
