@@ -20,6 +20,7 @@ name: proof-portguardian-201553-v2
           - lifecycle-no-listener
           - upgrade
           - regression
+          - managed
       mode:
         description: head or base (filters lifecycle/regression when run != all)
         required: true
@@ -674,3 +675,146 @@ jobs:
         with:
           name: pg201553-regression-base
           path: /tmp/pg201553/regression-base/
+
+  # ============================================== ordinary managed startup (blocker)
+  # The two lifecycle fixtures set disable-launchagent and passed --attach-only,
+  # so installation == .external and startAppHostedGateway returned at
+  # GatewayProcessManager+Hosting.swift:341, before the inspection branch at :360.
+  # This job removes both shortcuts and drives the packaged app's own startup:
+  # broken lsof must produce no child, and an idle port must produce one, which is
+  # the control that shows the fixture can start a healthy child at all.
+  managed-start-head:
+    name: managed-start-head
+    if: ${{ inputs.run == 'all' || inputs.run == 'managed' }}
+    runs-on: macos-26
+    timeout-minutes: 180
+    steps:
+      - name: Checkout PR head (candidate)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: 8ba0147560166a6ef593892719f3ef09605db2a6
+          path: openclaw
+
+      - name: Checkout proof tooling
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: main
+          path: proofrepo
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version || true
+          swift --version || true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dependencies
+        working-directory: openclaw
+        timeout-minutes: 25
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Prepare Apple Mermaid assets
+        working-directory: openclaw
+        run: node scripts/prepare-apple-mermaid.mjs
+
+      - name: Patch unrelated ChatUI build break
+        working-directory: openclaw
+        run: |
+          set -euo pipefail
+          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
+          FILE=apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaVideoAttachment.swift
+          python3 - "$FILE" <<'PY'
+          import sys
+          path = sys.argv[1]
+          src = open(path).read()
+          old = "                    VideoPlayer(player: player.player)"
+          new = "                    Color.black"
+          if old in src:
+              open(path, "w").write(src.replace(old, new, 1))
+              print("patched the unrelated ChatUI break")
+          else:
+              print("no ChatUI break on this tree")
+          PY
+          git diff --stat
+
+      - name: Build plugin assets
+        working-directory: openclaw
+        timeout-minutes: 20
+        run: pnpm plugins:assets:build
+
+      - name: Package the app (ad-hoc)
+        working-directory: openclaw
+        timeout-minutes: 80
+        env:
+          ALLOW_ADHOC_SIGNING: '1'
+          SIGN_IDENTITY: '-'
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.openclaw"
+          # Packaging must not install behind the build's back; the capture removes
+          # this marker again and asserts it is gone before the app is launched.
+          touch "$HOME/.openclaw/disable-launchagent"
+          ./scripts/package-mac-app.sh 2>&1 | tail -120
+          test -x dist/OpenClaw.app/Contents/MacOS/OpenClaw
+
+      - name: Managed startup with an unreadable port
+        working-directory: openclaw
+        env:
+          APP_PATH: ${{ github.workspace }}/openclaw/dist/OpenClaw.app
+          OUT_DIR: /tmp/pg201553/managed-broken
+          PROBE_DIR: ${{ github.workspace }}/proofrepo/probe
+          GATEWAY_PORT: '18789'
+          BUNDLE_ID: ai.openclaw.mac
+        run: |
+          set -o pipefail
+          bash "$PROBE_DIR/managed-start-capture.sh" managed-broken broken 2>&1 | tee /tmp/pg201553/managed-broken.log
+          rc=${PIPESTATUS[0]}
+          echo "BROKEN_RC=$rc"
+          exit "$rc"
+
+      - name: Managed startup with an idle port (child must start)
+        if: always()
+        working-directory: openclaw
+        env:
+          APP_PATH: ${{ github.workspace }}/openclaw/dist/OpenClaw.app
+          OUT_DIR: /tmp/pg201553/managed-free
+          PROBE_DIR: ${{ github.workspace }}/proofrepo/probe
+          GATEWAY_PORT: '18789'
+          BUNDLE_ID: ai.openclaw.mac
+        run: |
+          set -o pipefail
+          bash "$PROBE_DIR/managed-start-capture.sh" managed-free free 2>&1 | tee /tmp/pg201553/managed-free.log
+          rc=${PIPESTATUS[0]}
+          echo "FREE_RC=$rc"
+          exit "$rc"
+
+      - name: Show inline raw managed-startup evidence
+        if: always()
+        run: |
+          for m in broken free; do
+            O=/tmp/pg201553/managed-$m
+            echo "########## $O ($m) ##########"
+            grep -aE 'DISABLE_MARKER|LISTENERS_BEFORE|LAUNCHAGENT|APP_BINARY_SHA|STUB_CALLS|CHILD_|LISTENER_|PASS:|FAIL:|PROOF_FAIL|launch PATH' \
+              /tmp/pg201553/managed-$m.log 2>/dev/null || true
+            echo "----- discriminator lines from the app log -----"
+            grep -aoE "externally managed[^\"]{0,60}|Could not (inspect port|determine whether port) [0-9]+[^\"\n]{0,60}|five failed starts" \
+              "$O/app.log" 2>/dev/null | head -5 || true
+          done
+
+      - name: Upload managed-startup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg201553-managed-start
+          path: |
+            /tmp/pg201553/managed-broken/
+            /tmp/pg201553/managed-free/
+            /tmp/pg201553/managed-*.log

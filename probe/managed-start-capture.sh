@@ -1,0 +1,192 @@
+#!/bin/bash
+# PortGuardian PR #201553 - ordinary managed startup, packaged app, no fixtures.
+#
+#   managed-start-capture.sh <label> <broken|free>
+#
+# The previous lifecycle fixtures set ~/.openclaw/disable-launchagent and passed
+# --attach-only. Both reach `installation == .external`, and
+# startAppHostedGateway returns at GatewayProcessManager+Hosting.swift:341 before
+# the inspection branch at :360, so their "no child" result came from the fixture.
+# This capture removes both: no marker, no attach-only, Onboarding already seen,
+# no LaunchAgent installed, so installation falls through to .managed and the app
+# reaches the branch under test on its own.
+#
+#   broken: lsof exits 1 with a diagnostic -> the port is unreadable
+#           expectation: no Gateway child, no listener, unknown-port diagnostic
+#   free:   lsof exits 1 with no diagnostic -> the port is idle
+#           expectation: a real child starts (this is the control that proves the
+#           fixture can produce a child at all)
+#
+# The verdict is echoed as PASS:/FAIL: lines and PROOF_FAIL=<n>.
+set -uo pipefail
+
+LABEL="${1:?usage: managed-start-capture.sh <label> <broken|free>}"
+MODE="${2:?usage: managed-start-capture.sh <label> <broken|free>}"
+case "$MODE" in broken|free) ;; *) echo "bad mode: $MODE"; exit 2 ;; esac
+
+APP="${APP_PATH:?APP_PATH required}"
+OUT="${OUT_DIR:-/tmp/pg201553/managed-$MODE}"
+PROBE_DIR="${PROBE_DIR:-$(cd "$(dirname "$0")" && pwd)}"
+PORT="${GATEWAY_PORT:-18789}"
+BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac}"
+REAL_LSOF=/usr/sbin/lsof
+PLIST="$HOME/Library/LaunchAgents/ai.openclaw.gateway.plist"
+STATE="$HOME/.openclaw"
+fail=0
+
+mkdir -p "$OUT"
+run_limited() { local secs="$1"; shift; ( "$@" ) & local p=$!; ( sleep "$secs"; kill "$p" 2>/dev/null ) & local w=$!; wait "$p" 2>/dev/null; kill "$w" 2>/dev/null; }
+check() {
+  local label="$1"; shift
+  if "$@"; then echo "PASS: $label"; else echo "FAIL: $label"; fail=$((fail + 1)); fi
+}
+say() { echo; echo "==== $* ===="; }
+
+say "capture label=$LABEL mode=$MODE"
+echo "APP=$APP"
+echo "APP_BINARY_SHA=$(shasum -a 256 "$APP/Contents/MacOS/OpenClaw" | awk '{print $1}')"
+
+# ---------------------------------------------------------------- the fixture fix
+say "remove the two fixture shortcuts"
+rm -f "$STATE/disable-launchagent"
+if [ -e "$STATE/disable-launchagent" ]; then
+  echo "DISABLE_MARKER=present"
+else
+  echo "DISABLE_MARKER=absent"
+fi
+launchctl bootout "gui/$(id -u)/ai.openclaw.gateway" 2>/dev/null || true
+rm -f "$PLIST"
+pkill -f "openclaw.mjs gateway" 2>/dev/null || true
+pkill -f "OpenClaw.app/Contents/MacOS/OpenClaw" 2>/dev/null || true
+sleep 2
+echo "LAUNCHAGENT_PRESENT=$( [ -e "$PLIST" ] && echo yes || echo no )"
+echo "LISTENERS_BEFORE=$("$REAL_LSOF" -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | wc -l | tr -d ' ')"
+
+# ---------------------------------------------------------------- ordinary state
+say "seed the ordinary state an installed user has"
+mkdir -p "$STATE"
+cat > "$STATE/openclaw.json" <<JSON
+{
+  "gateway": { "mode": "local", "port": $PORT, "auth": { "mode": "none" } }
+}
+JSON
+defaults write "$BUNDLE_ID" openclaw.onboardingSeen -bool true 2>/dev/null || true
+defaults write "$BUNDLE_ID" openclaw.onboardingVersion -int 99 2>/dev/null || true
+echo "onboardingSeen=$(defaults read "$BUNDLE_ID" openclaw.onboardingSeen 2>/dev/null || echo missing)"
+echo "onboardingVersion=$(defaults read "$BUNDLE_ID" openclaw.onboardingVersion 2>/dev/null || echo missing)"
+
+# ---------------------------------------------------------------- the lsof answer
+POISON="$OUT/poison-$MODE"
+rm -rf "$POISON"; mkdir -p "$POISON"
+CALLS="$OUT/stub-calls.log"; : > "$CALLS"
+if [ "$MODE" = "broken" ]; then
+  # Exit 1 as lsof does for "no match", but with a diagnostic on stderr: the
+  # probe must treat this as unreadable, not as a free port.
+  cat > "$POISON/lsof" <<STUB
+#!/bin/bash
+echo "\$*" >> "$CALLS"
+echo "lsof: proc_listpids failed: Cannot allocate memory" >&2
+exit 1
+STUB
+else
+  # Exit 1 with nothing on stderr: exactly what an idle port returns.
+  cat > "$POISON/lsof" <<STUB
+#!/bin/bash
+echo "\$*" >> "$CALLS"
+exit 1
+STUB
+fi
+chmod +x "$POISON/lsof"
+echo "stub=$POISON/lsof"
+echo "launch PATH=$POISON:/usr/bin:/bin:/usr/sbin:/sbin"
+
+# ---------------------------------------------------------------- launch the app
+# No --attach-only and no --no-launchd: those would set attachOnly and keep the
+# app away from the start path. --debug-open-menu only opens the status menu so
+# the app's own Debug -> Restart Gateway entry is reachable by AX.
+say "launch the packaged app normally (no --attach-only)"
+LOG="$OUT/app.log"
+: > "$LOG"
+PATH="$POISON:/usr/bin:/bin:/usr/sbin:/sbin" \
+  "$APP/Contents/MacOS/OpenClaw" --debug-open-menu > "$LOG" 2>&1 &
+APP_PID=$!
+echo "APP_PID=$APP_PID"
+
+sleep 8
+EARLY_CALLS=$(wc -l < "$CALLS" | tr -d ' ')
+echo "STUB_CALLS_AT_LAUNCH=$EARLY_CALLS"
+if [ "$EARLY_CALLS" -eq 0 ]; then
+  # Launch alone does not always reach the start path (desiredActive is user
+  # driven), so use the app's own restart entry the way a user would.
+  say "AX click the app's Debug -> Restart Gateway"
+  APP_PID="$APP_PID" run_limited 130 osascript "$PROBE_DIR/restart-gateway.applescript" \
+    > "$OUT/menu.log" 2>&1 || true
+  grep -E "CLICKED_RESTART_GATEWAY|NO_MENUBAR2|NO_DEBUG_ITEM|NO_RESTART_ITEM|ERR\[|STATUS_CLICK_ERR" \
+    "$OUT/menu.log" | head -6 || echo "(no click result)"
+fi
+
+# The app probes, and on an idle port seeds a runtime before it starts a child,
+# so the window is generous and both outcomes are polled.
+CHILD_MAX=0
+LISTENER_MAX=0
+for tick in $(seq 1 40); do
+  sleep 3
+  child=$(pgrep -f "openclaw.mjs gateway" | wc -l | tr -d ' ')
+  listener=$("$REAL_LSOF" -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | wc -l | tr -d ' ')
+  [ "$child" -gt "$CHILD_MAX" ] && CHILD_MAX=$child
+  [ "$listener" -gt "$LISTENER_MAX" ] && LISTENER_MAX=$listener
+  if [ "$MODE" = "free" ] && { [ "$child" -ge 1 ] || [ "$listener" -ge 1 ]; }; then
+    echo "poll $tick: child=$child listener=$listener (control satisfied)"
+    break
+  fi
+  if [ "$MODE" = "broken" ] && [ "$tick" -ge 12 ]; then
+    echo "poll $tick: child=$child listener=$listener"
+    break
+  fi
+done
+
+say "observed"
+CHILD_NOW=$(pgrep -f "openclaw.mjs gateway" | wc -l | tr -d ' ')
+LISTENER_NOW=$("$REAL_LSOF" -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | wc -l | tr -d ' ')
+STUB_CALLS=$(wc -l < "$CALLS" | tr -d ' ')
+echo "CHILD_MAX=$CHILD_MAX"
+echo "LISTENER_MAX=$LISTENER_MAX"
+echo "CHILD_NOW=$CHILD_NOW"
+echo "LISTENER_NOW=$LISTENER_NOW"
+echo "STUB_CALLS=$STUB_CALLS"
+echo "DISABLE_MARKER_AFTER=$( [ -e "$STATE/disable-launchagent" ] && echo present || echo absent )"
+echo "LAUNCHAGENT_AFTER=$( [ -e "$PLIST" ] && echo written || echo absent )"
+echo "--- stub invocations ---"
+head -5 "$CALLS"
+echo "--- ps: gateway-ish processes ---"
+ps -Ao pid,command | grep -E "openclaw.mjs gateway|OpenClaw.app/Contents/MacOS" | grep -v grep | head -6 || echo "(none)"
+echo "--- app log: the lines that matter ---"
+grep -aoE "externally managed[^\"]{0,80}|Could not inspect port [0-9]+[^\"\n]{0,70}|Could not determine whether port [0-9]+[^\"\n]{0,60}|Gateway stopped after five failed starts|Gateway child launch failed" "$LOG" | head -8 || echo "(none)"
+
+say "verdict"
+check "the disable-launchagent fixture is gone" test ! -e "$STATE/disable-launchagent"
+check "the shipped probe ran through the poisoned PATH" test "$STUB_CALLS" -ge 1
+check "the app was driven through its own start entry" \
+  bash -c "grep -q CLICKED_RESTART_GATEWAY '$OUT/menu.log' 2>/dev/null || [ $STUB_CALLS -ge 1 ]"
+# .external would have failed at Hosting.swift:341 with this exact sentence and
+# never reached the inspection branch, which is what made the old fixtures moot.
+check "startup was not refused as an externally managed Gateway" \
+  bash -c "! grep -aq 'externally managed' '$LOG'"
+if [ "$MODE" = "broken" ]; then
+  check "an unreadable port never produced a Gateway child" test "$CHILD_MAX" -eq 0
+  check "no listener appeared on the unreadable port" test "$LISTENER_MAX" -eq 0
+  check "the app published the unknown-port diagnostic" \
+    bash -c "grep -aqE 'Could not (inspect port|determine whether port) $PORT' '$LOG'"
+else
+  # The control the review asked for: the same fixture, same binary, same launch
+  # path, must be able to start a healthy child when the port really is free.
+  check "an idle port starts a real Gateway child" test "$CHILD_MAX" -ge 1
+  check "the idle-port child owns the listener" test "$LISTENER_MAX" -ge 1
+fi
+
+pkill -f "OpenClaw.app/Contents/MacOS/OpenClaw" 2>/dev/null || true
+kill "$APP_PID" 2>/dev/null || true
+pkill -f "openclaw.mjs gateway" 2>/dev/null || true
+
+echo "PROOF_FAIL=$fail"
+exit "$([ "$fail" -eq 0 ] && echo 0 || echo 1)"
