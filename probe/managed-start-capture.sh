@@ -35,7 +35,7 @@ STATE="$HOME/.openclaw"
 fail=0
 
 mkdir -p "$OUT"
-run_limited() { local secs="$1"; shift; timeout "$secs" "$@" 2>&1 || true; }
+run_limited() { local secs="$1"; shift; perl -e 'alarm shift; exec @ARGV' "$secs" "$@" 2>&1 || true; }
 check() {
   local label="$1"; shift
   if "$@"; then echo "PASS: $label"; else echo "FAIL: $label"; fail=$((fail + 1)); fi
@@ -66,6 +66,8 @@ for w in $(seq 1 10); do
   [ "$remaining" -eq 0 ] && break
   sleep 1
 done
+# AppInstanceLock (AppProfile.swift:75) lives in /tmp, not the state dir.
+rm -rf "/tmp/openclaw-$(id -u)-app-instances" 2>/dev/null || true
 rm -f "$STATE/.instance.lock" "$STATE/instance.lock" 2>/dev/null || true
 sleep 1
 echo "LAUNCHAGENT_PRESENT=$( [ -e "$PLIST" ] && echo yes || echo no )"
