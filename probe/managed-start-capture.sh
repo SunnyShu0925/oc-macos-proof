@@ -119,29 +119,22 @@ say "launch the packaged app normally (no --attach-only)"
 LOG="$OUT/app.log"
 : > "$LOG"
 PATH="$POISON:/usr/bin:/bin:/usr/sbin:/sbin" \
-  "$APP/Contents/MacOS/OpenClaw" --debug-open-menu > "$LOG" 2>&1 &
+  "$APP/Contents/MacOS/OpenClaw" > "$LOG" 2>&1 &
 APP_PID=$!
 echo "APP_PID=$APP_PID"
 
-sleep 12
+sleep 15
 EARLY_CALLS=$(wc -l < "$CALLS" | tr -d ' ')
 echo "STUB_CALLS_AT_LAUNCH=$EARLY_CALLS"
 if [ "$EARLY_CALLS" -eq 0 ]; then
-  # Launch alone does not always reach the start path (desiredActive is user
-  # driven), so use the app's own restart entry the way a user would. The Debug
-  # menu only exists in #if DEBUG builds, so the shipped Release app has no
-  # Restart Gateway item; instead, re-apply the connection mode by sending the
-  # app a fresh local-mode state through the control server, which re-triggers
-  # ConnectionModeCoordinator.apply -> setActive(true) -> startIfNeeded.
-  say "re-trigger startup via control server"
-  RT="$APP/Contents/Resources/runtime"
-  MJS="$RT/lib/node_modules/openclaw/openclaw.mjs"
-  "$RT/bin/bun" "$MJS" gateway restart > "$OUT/restart.log" 2>&1 || true
-  echo "--- restart log ---"
-  tail -10 "$OUT/restart.log" 2>/dev/null || echo "(empty)"
-  sleep 5
-  EARLY_CALLS=$(wc -l < "$CALLS" | tr -d ' ')
-  echo "STUB_CALLS_AFTER_RESTART=$EARLY_CALLS"
+  # The app may need more time to reach ConnectionModeCoordinator.apply. Poll
+  # for the stub call instead of guessing a fixed sleep.
+  for w in $(seq 1 15); do
+    sleep 3
+    EARLY_CALLS=$(wc -l < "$CALLS" | tr -d ' ')
+    [ "$EARLY_CALLS" -ge 1 ] && break
+  done
+  echo "STUB_CALLS_AFTER_WAIT=$EARLY_CALLS"
 fi
 
 # The app probes, and on an idle port seeds a runtime before it starts a child,
