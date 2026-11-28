@@ -148,10 +148,19 @@ CHILD_MAX=0
 LISTENER_MAX=0
 for tick in $(seq 1 40); do
   sleep 3
-  # The child is a bun process running openclaw.mjs; match either pattern.
-  child=$(pgrep -f "openclaw.mjs gateway" | wc -l | tr -d ' ')
-  child=$((child + $(pgrep -f "OpenClaw.app/Contents/Resources/runtime.*gateway" | wc -l | tr -d ' ')))
-  listener=$("$REAL_LSOF" -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | wc -l | tr -d ' ')
+  # The child is a bun process; its command line may not contain "openclaw.mjs"
+  # or "gateway" verbatim. The authoritative signal is a listener on the port
+  # owned by a process that is not the app itself.
+  listener_lines=$("$REAL_LSOF" -nP -iTCP:"$PORT" -sTCP:LISTEN -Fp 2>/dev/null | grep '^p' | sort -u)
+  listener_count=$(echo "$listener_lines" | grep -c '^p')
+  app_pid_str="p$APP_PID"
+  child=0
+  for lp in $listener_lines; do
+    lpid=${lp#p}
+    [ "$lpid" = "$APP_PID" ] && continue
+    [ -n "$lpid" ] && child=$((child + 1))
+  done
+  listener=$listener_count
   [ "$child" -gt "$CHILD_MAX" ] && CHILD_MAX=$child
   [ "$listener" -gt "$LISTENER_MAX" ] && LISTENER_MAX=$listener
   if [ "$MODE" = "free" ] && { [ "$child" -ge 1 ] || [ "$listener" -ge 1 ]; }; then
@@ -165,9 +174,16 @@ for tick in $(seq 1 40); do
 done
 
 say "observed"
-CHILD_NOW=$(pgrep -f "openclaw.mjs gateway" | wc -l | tr -d ' ')
-CHILD_NOW=$((CHILD_NOW + $(pgrep -f "OpenClaw.app/Contents/Resources/runtime.*gateway" | wc -l | tr -d ' ')))
-LISTENER_NOW=$("$REAL_LSOF" -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | wc -l | tr -d ' ')
+# Count listeners not owned by the app process itself.
+listener_lines_now=$("$REAL_LSOF" -nP -iTCP:"$PORT" -sTCP:LISTEN -Fp 2>/dev/null | grep '^p' | sort -u)
+CHILD_NOW=0
+LISTENER_NOW=0
+for lp in $listener_lines_now; do
+  lpid=${lp#p}
+  LISTENER_NOW=$((LISTENER_NOW + 1))
+  [ "$lpid" = "$APP_PID" ] && continue
+  [ -n "$lpid" ] && CHILD_NOW=$((CHILD_NOW + 1))
+done
 STUB_CALLS=$(wc -l < "$CALLS" | tr -d ' ')
 echo "CHILD_MAX=$CHILD_MAX"
 echo "LISTENER_MAX=$LISTENER_MAX"
