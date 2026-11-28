@@ -35,7 +35,7 @@ STATE="$HOME/.openclaw"
 fail=0
 
 mkdir -p "$OUT"
-run_limited() { local secs="$1"; shift; ( "$@" ) & local p=$!; ( sleep "$secs"; kill "$p" 2>/dev/null ) & local w=$!; wait "$p" 2>/dev/null; kill "$w" 2>/dev/null; }
+run_limited() { local secs="$1"; shift; timeout "$secs" "$@" 2>&1 || true; }
 check() {
   local label="$1"; shift
   if "$@"; then echo "PASS: $label"; else echo "FAIL: $label"; fail=$((fail + 1)); fi
@@ -56,9 +56,18 @@ else
 fi
 launchctl bootout "gui/$(id -u)/ai.openclaw.gateway" 2>/dev/null || true
 rm -f "$PLIST"
+# A previous capture's app holds an AppInstanceLock (MenuBar.swift:229) that makes
+# the next launch print "OpenClaw profile is already running" and exit(2). Kill
+# every trace and wait until the lock file is actually released.
 pkill -f "openclaw.mjs gateway" 2>/dev/null || true
 pkill -f "OpenClaw.app/Contents/MacOS/OpenClaw" 2>/dev/null || true
-sleep 2
+for w in $(seq 1 10); do
+  remaining=$(pgrep -f "OpenClaw.app/Contents/MacOS/OpenClaw" | wc -l | tr -d ' ')
+  [ "$remaining" -eq 0 ] && break
+  sleep 1
+done
+rm -f "$STATE/.instance.lock" "$STATE/instance.lock" 2>/dev/null || true
+sleep 1
 echo "LAUNCHAGENT_PRESENT=$( [ -e "$PLIST" ] && echo yes || echo no )"
 echo "LISTENERS_BEFORE=$("$REAL_LSOF" -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | wc -l | tr -d ' ')"
 
@@ -162,6 +171,12 @@ echo "--- ps: gateway-ish processes ---"
 ps -Ao pid,command | grep -E "openclaw.mjs gateway|OpenClaw.app/Contents/MacOS" | grep -v grep | head -6 || echo "(none)"
 echo "--- app log: the lines that matter ---"
 grep -aoE "externally managed[^\"]{0,80}|Could not inspect port [0-9]+[^\"\n]{0,70}|Could not determine whether port [0-9]+[^\"\n]{0,60}|Gateway stopped after five failed starts|Gateway child launch failed" "$LOG" | head -8 || echo "(none)"
+echo "--- unified log: gateway/port/child lines ---"
+run_limited 60 log show --last 5m --style compact \
+  --predicate 'process == "OpenClaw" AND (eventMessage CONTAINS[c] "gateway" OR eventMessage CONTAINS[c] "port" OR eventMessage CONTAINS[c] "child" OR eventMessage CONTAINS[c] "inspect" OR eventMessage CONTAINS[c] "attach" OR eventMessage CONTAINS[c] "determine")' \
+  > "$OUT/oslog.txt" 2>&1 || true
+grep -iE 'could not (inspect|determine)|externally managed|five failed|child.*launch|attach|gateway.*start|using existing|retry in a moment' \
+  "$OUT/oslog.txt" | tail -20 || echo "(no unified-log matches)"
 
 say "verdict"
 check "the disable-launchagent fixture is gone" test ! -e "$STATE/disable-launchagent"
@@ -171,12 +186,12 @@ check "the app was driven through its own start entry" \
 # .external would have failed at Hosting.swift:341 with this exact sentence and
 # never reached the inspection branch, which is what made the old fixtures moot.
 check "startup was not refused as an externally managed Gateway" \
-  bash -c "! grep -aq 'externally managed' '$LOG'"
+  bash -c "! grep -aq 'externally managed' '$LOG' '$OUT/oslog.txt'"
 if [ "$MODE" = "broken" ]; then
   check "an unreadable port never produced a Gateway child" test "$CHILD_MAX" -eq 0
   check "no listener appeared on the unreadable port" test "$LISTENER_MAX" -eq 0
   check "the app published the unknown-port diagnostic" \
-    bash -c "grep -aqE 'Could not (inspect port|determine whether port) $PORT' '$LOG'"
+    bash -c "grep -aqiE 'could not (inspect port|determine whether port) $PORT' '$LOG' '$OUT/oslog.txt'"
 else
   # The control the review asked for: the same fixture, same binary, same launch
   # path, must be able to start a healthy child when the port really is free.
