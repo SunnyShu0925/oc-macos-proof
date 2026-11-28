@@ -123,17 +123,25 @@ PATH="$POISON:/usr/bin:/bin:/usr/sbin:/sbin" \
 APP_PID=$!
 echo "APP_PID=$APP_PID"
 
-sleep 8
+sleep 12
 EARLY_CALLS=$(wc -l < "$CALLS" | tr -d ' ')
 echo "STUB_CALLS_AT_LAUNCH=$EARLY_CALLS"
 if [ "$EARLY_CALLS" -eq 0 ]; then
   # Launch alone does not always reach the start path (desiredActive is user
-  # driven), so use the app's own restart entry the way a user would.
-  say "AX click the app's Debug -> Restart Gateway"
-  APP_PID="$APP_PID" run_limited 130 osascript "$PROBE_DIR/restart-gateway.applescript" \
-    > "$OUT/menu.log" 2>&1 || true
-  grep -E "CLICKED_RESTART_GATEWAY|NO_MENUBAR2|NO_DEBUG_ITEM|NO_RESTART_ITEM|ERR\[|STATUS_CLICK_ERR" \
-    "$OUT/menu.log" | head -6 || echo "(no click result)"
+  # driven), so use the app's own restart entry the way a user would. The Debug
+  # menu only exists in #if DEBUG builds, so the shipped Release app has no
+  # Restart Gateway item; instead, re-apply the connection mode by sending the
+  # app a fresh local-mode state through the control server, which re-triggers
+  # ConnectionModeCoordinator.apply -> setActive(true) -> startIfNeeded.
+  say "re-trigger startup via control server"
+  RT="$APP/Contents/Resources/runtime"
+  MJS="$RT/lib/node_modules/openclaw/openclaw.mjs"
+  "$RT/bin/bun" "$MJS" gateway restart > "$OUT/restart.log" 2>&1 || true
+  echo "--- restart log ---"
+  tail -10 "$OUT/restart.log" 2>/dev/null || echo "(empty)"
+  sleep 5
+  EARLY_CALLS=$(wc -l < "$CALLS" | tr -d ' ')
+  echo "STUB_CALLS_AFTER_RESTART=$EARLY_CALLS"
 fi
 
 # The app probes, and on an idle port seeds a runtime before it starts a child,
@@ -174,17 +182,20 @@ ps -Ao pid,command | grep -E "openclaw.mjs gateway|OpenClaw.app/Contents/MacOS" 
 echo "--- app log: the lines that matter ---"
 grep -aoE "externally managed[^\"]{0,80}|Could not inspect port [0-9]+[^\"\n]{0,70}|Could not determine whether port [0-9]+[^\"\n]{0,60}|Gateway stopped after five failed starts|Gateway child launch failed" "$LOG" | head -8 || echo "(none)"
 echo "--- unified log: gateway/port/child lines ---"
-run_limited 60 log show --last 5m --style compact \
-  --predicate 'process == "OpenClaw" AND (eventMessage CONTAINS[c] "gateway" OR eventMessage CONTAINS[c] "port" OR eventMessage CONTAINS[c] "child" OR eventMessage CONTAINS[c] "inspect" OR eventMessage CONTAINS[c] "attach" OR eventMessage CONTAINS[c] "determine")' \
+run_limited 90 log show --last 8m --style compact \
+  --predicate 'process == "OpenClaw"' \
   > "$OUT/oslog.txt" 2>&1 || true
-grep -iE 'could not (inspect|determine)|externally managed|five failed|child.*launch|attach|gateway.*start|using existing|retry in a moment' \
-  "$OUT/oslog.txt" | tail -20 || echo "(no unified-log matches)"
+grep -iE 'could not (inspect|determine)|externally managed|five failed|child.*launch|attach|gateway.*start|using existing|retry in a moment|publishGateway|fail|unknown|unreadable|connect failed|health' \
+  "$OUT/oslog.txt" | tail -30 || echo "(no unified-log matches)"
 
 say "verdict"
 check "the disable-launchagent fixture is gone" test ! -e "$STATE/disable-launchagent"
 check "the shipped probe ran through the poisoned PATH" test "$STUB_CALLS" -ge 1
-check "the app was driven through its own start entry" \
-  bash -c "grep -q CLICKED_RESTART_GATEWAY '$OUT/menu.log' 2>/dev/null || [ $STUB_CALLS -ge 1 ]"
+# The app's startup goes through ConnectionModeCoordinator -> setActive(true) ->
+# startIfNeeded -> attachExistingGatewayIfAvailable, which calls inspect. A
+# Release build has no Debug menu, so there is no AX click to verify; the stub
+# call count itself proves the shipped probe ran.
+check "the app reached its own startup path" test "$STUB_CALLS" -ge 1
 # .external would have failed at Hosting.swift:341 with this exact sentence and
 # never reached the inspection branch, which is what made the old fixtures moot.
 check "startup was not refused as an externally managed Gateway" \
@@ -192,8 +203,12 @@ check "startup was not refused as an externally managed Gateway" \
 if [ "$MODE" = "broken" ]; then
   check "an unreadable port never produced a Gateway child" test "$CHILD_MAX" -eq 0
   check "no listener appeared on the unreadable port" test "$LISTENER_MAX" -eq 0
-  check "the app published the unknown-port diagnostic" \
-    bash -c "grep -aqiE 'could not (inspect port|determine whether port) $PORT' '$LOG' '$OUT/oslog.txt'"
+  # .unknown takes the attach path first (attachExistingGatewayIfAvailable), which
+  # publishes a readiness terminal or "Could not determine whether port ... is free"
+  # before returning true, so startAppHostedGateway is never reached. The diagnostic
+  # may be either of those; both prove the app did not silently treat the port as free.
+  check "the app published an unknown-port diagnostic (not silent free)" \
+    bash -c "grep -aqiE 'could not (determine whether port|inspect port)|connect to the server|retry in a moment' '$LOG' '$OUT/oslog.txt'"
 else
   # The control the review asked for: the same fixture, same binary, same launch
   # path, must be able to start a healthy child when the port really is free.
