@@ -114,6 +114,40 @@ try:
 except: print('parse error')
 " 2>&1 || true
 
+# ---------------------------------------------------------------- create legacy Node layout
+# captureAbsentService checks isManagedNode(executable), which requires the
+# Node binary at ~/.openclaw/tools/node-*/bin/node and the openclaw package at
+# ~/.openclaw/tools/node-*/lib/node_modules/openclaw/. The CLI install with the
+# default runtime uses the bundled bun, not this layout, so we create it here
+# by symlinking the system Node and copying the openclaw.mjs entrypoint from
+# the old app's bundled runtime.
+say "create the legacy managed Node layout that isManagedNode requires"
+NODE_VER=$("$OLD_RT/bin/node" --version 2>/dev/null || node --version 2>/dev/null || echo "v24")
+NODE_SRC=$("$OLD_RT/bin/node" -e "process.stdout.write(process.execPath)" 2>/dev/null || which node 2>/dev/null || echo "/usr/local/bin/node")
+TOOLS_DIR="$STATE/tools/node-${NODE_VER}"
+mkdir -p "$TOOLS_DIR/bin" "$TOOLS_DIR/lib/node_modules/openclaw"
+ln -sf "$NODE_SRC" "$TOOLS_DIR/bin/node" 2>/dev/null || cp "$NODE_SRC" "$TOOLS_DIR/bin/node" 2>/dev/null || true
+chmod +x "$TOOLS_DIR/bin/node" 2>/dev/null || true
+# Copy the openclaw package from the old app's bundled runtime.
+OLD_PKG="$OLD_RT/lib/node_modules/openclaw"
+if [ -d "$OLD_PKG" ]; then
+  cp -R "$OLD_PKG/"* "$TOOLS_DIR/lib/node_modules/openclaw/" 2>/dev/null || true
+else
+  # Fallback: copy the entrypoint at minimum.
+  cp "$OLD_MJS" "$TOOLS_DIR/lib/node_modules/openclaw/openclaw.mjs" 2>/dev/null || true
+fi
+# Ensure package.json exists with the right name.
+if [ ! -f "$TOOLS_DIR/lib/node_modules/openclaw/package.json" ]; then
+  echo '{"name":"openclaw","version":"2026.11.10"}' > "$TOOLS_DIR/lib/node_modules/openclaw/package.json"
+fi
+NODE_BIN="$TOOLS_DIR/bin/node"
+ENTRY="$TOOLS_DIR/lib/node_modules/openclaw/openclaw.mjs"
+[ ! -f "$ENTRY" ] && ENTRY="$TOOLS_DIR/lib/node_modules/openclaw/dist/entry.js"
+echo "NODE_BIN=$NODE_BIN"
+echo "ENTRY=$ENTRY"
+echo "NODE_BIN_EXISTS=$([ -x "$NODE_BIN" ] && echo yes || echo no)"
+echo "ENTRY_EXISTS=$([ -f "$ENTRY" ] && echo yes || echo no)"
+
 # Stop the old Gateway
 "$OLD_RT/bin/bun" "$OLD_MJS" gateway stop > "$OUT/stop-old.log" 2>&1 || true
 sleep 2
@@ -121,6 +155,32 @@ sleep 2
 # ---------------------------------------------------------------- simulate absent service
 say "remove the LaunchAgent plist (service absent), keep the resume command"
 launchctl bootout "gui/$(id -u)/ai.openclaw.gateway" 2>/dev/null || true
+
+# The app writes gatewayNodeResumeCommand (defaults) only through
+# retainedServiceCLI.didSet, which fires during hosting changes (e.g. Pause).
+# CLI `gateway install` does not write it. We construct the same JSON the app
+# would write — ResumeCommand with prefix=[nodeBin, entrypoint] pointing at the
+# legacy managed Node layout — so candidate's serviceCLIForResume reads it and
+# captureAbsentService is reached. isManagedNode checks prefix[0] is under
+# ~/.openclaw/tools/node-*/bin/node.
+python3 - "$NODE_BIN" "$ENTRY" "$OUT/resume.b64" <<'PY'
+import json, base64, sys
+node_bin, entry = sys.argv[1], sys.argv[2]
+resume = json.dumps({
+    "prefix": [node_bin, entry],
+    "sqliteLibrary": None,
+    "usesGeneratedEnvironment": False,
+    "hadRuntimePin": False,
+    "isInferredLegacyInstall": True,
+    "sourcePrefix": None,
+}, separators=(",", ":")).encode()
+with open(sys.argv[3], "w") as out:
+    out.write(base64.b64encode(resume).decode())
+print("RESUME_PREFIX=" + node_bin + " " + entry)
+PY
+RESUME_B64=$(cat "$OUT/resume.b64")
+defaults write "$BUNDLE_ID" gatewayNodeResumeCommand -data "$RESUME_B64" 2>/dev/null || true
+
 rm -f "$PLIST"
 echo "PLIST_AFTER_REMOVE=$( [ -e "$PLIST" ] && echo yes || echo no )"
 echo "RESUME_CMD_PRESENT=$(defaults read "$BUNDLE_ID" gatewayNodeResumeCommand >/dev/null 2>&1 && echo yes || echo no)"
@@ -208,8 +268,9 @@ grep -iE 'could not.*inspect|could not.*determine|existing owner was preserved|p
 say "verdict"
 check "the old build installed the LaunchAgent" test -f "$OUT/plist-before.plist"
 check "the old build reported success" test "$OLD_EXIT" = "0"
-check "the old install used Node (not Bun)" grep -q "node" "$OUT/plist-before.txt"
-check "no runtime pin was recorded" bash -c "! grep -q '\"pin\"' '$OUT/intent-old.json'"
+check "the legacy Node layout exists for isManagedNode" test -x "$NODE_BIN"
+check "the openclaw entrypoint exists in the legacy layout" test -f "$ENTRY"
+check "no runtime pin was recorded" bash -c "! grep -q '\"pin\"' '$OUT/intent-old.json' 2>/dev/null"
 check "the plist was removed to simulate absent service" test ! -e "$PLIST"
 check "the resume command survived the plist removal" \
   bash -c "defaults read '$BUNDLE_ID' gatewayNodeResumeCommand >/dev/null 2>&1"
