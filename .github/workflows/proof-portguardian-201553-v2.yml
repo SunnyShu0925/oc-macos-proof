@@ -21,6 +21,7 @@ name: proof-portguardian-201553-v2
           - upgrade
           - regression
           - managed
+          - migration
       mode:
         description: head or base (filters lifecycle/regression when run != all)
         required: true
@@ -818,3 +819,126 @@ jobs:
             /tmp/pg201553/managed-broken/
             /tmp/pg201553/managed-free/
             /tmp/pg201553/managed-*.log
+
+  # =========================================== absent-service migration (blocker)
+  # Rev 10: the upgrade fixture installed pinned Bun, so captureAbsentService
+  # (which requires an unpinned managed Node install with no pin record) was
+  # never reached. This job installs with the default Node runtime, removes the
+  # plist to make the service absent, and launches the candidate with broken lsof.
+  migration-absent:
+    name: migration-absent
+    if: ${{ inputs.run == 'all' || inputs.run == 'migration' }}
+    runs-on: macos-26
+    timeout-minutes: 180
+    steps:
+      - name: Checkout old stable app (v2026.11.10)
+        uses: actions/checkout@v4
+        with:
+          repository: openclaw/openclaw
+          ref: v2026.11.10
+          path: old
+
+      - name: Checkout PR head (candidate)
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/openclaw
+          ref: 8ba0147560166a6ef593892719f3ef09605db2a6
+          path: new
+
+      - name: Checkout proof tooling
+        uses: actions/checkout@v4
+        with:
+          repository: SunnyShu0925/oc-macos-proof
+          ref: main
+          path: proofrepo
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version || true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Package the old stable app
+        timeout-minutes: 85
+        env:
+          ALLOW_ADHOC_SIGNING: '1'
+          SIGN_IDENTITY: '-'
+        run: |
+          set -euo pipefail
+          cd old
+          corepack enable
+          pnpm install --frozen-lockfile --config.node-linker=hoisted
+          node scripts/prepare-apple-mermaid.mjs || true
+          pnpm plugins:assets:build || true
+          mkdir -p "$HOME/.openclaw"
+          touch "$HOME/.openclaw/disable-launchagent"
+          ./scripts/package-mac-app.sh 2>&1 | tail -120
+          test -x dist/OpenClaw.app/Contents/MacOS/OpenClaw
+
+      - name: Package the candidate app
+        timeout-minutes: 85
+        env:
+          ALLOW_ADHOC_SIGNING: '1'
+          SIGN_IDENTITY: '-'
+        run: |
+          set -euo pipefail
+          cd new
+          corepack enable
+          pnpm install --frozen-lockfile
+          node scripts/prepare-apple-mermaid.mjs
+          FILE=apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMediaVideoAttachment.swift
+          python3 - "$FILE" <<'PY'
+          import sys
+          path = sys.argv[1]
+          src = open(path).read()
+          old_line = "                    VideoPlayer(player: player.player)"
+          new_line = "                    Color.black"
+          if old_line in src:
+              open(path, "w").write(src.replace(old_line, new_line, 1))
+              print("patched the unrelated ChatUI break")
+          else:
+              print("no ChatUI break on this tree")
+          PY
+          pnpm plugins:assets:build
+          mkdir -p "$HOME/.openclaw"
+          ./scripts/package-mac-app.sh 2>&1 | tail -120
+          test -x dist/OpenClaw.app/Contents/MacOS/OpenClaw
+
+      - name: Absent-service migration with an unreadable port
+        env:
+          APP_PATH: ${{ github.workspace }}/new/dist/OpenClaw.app
+          OLD_RUNTIME: ${{ github.workspace }}/old/dist/OpenClaw.app/Contents/Resources/runtime
+          OUT_DIR: /tmp/pg201553/migration-absent
+          PROBE_DIR: ${{ github.workspace }}/proofrepo/probe
+          GATEWAY_PORT: '18789'
+          BUNDLE_ID: ai.openclaw.mac
+        run: |
+          set -o pipefail
+          bash "$PROBE_DIR/migration-absent-capture.sh" migration-absent 2>&1 | tee /tmp/pg201553/migration-absent.log
+          rc=${PIPESTATUS[0]}
+          echo "MIGRATION_RC=$rc"
+          exit "$rc"
+
+      - name: Show inline raw migration evidence
+        if: always()
+        run: |
+          O=/tmp/pg201553/migration-absent
+          echo "===== key lines ====="
+          grep -aE 'PLIST|PIN_DB|RESUME|STUB_CALLS|CHILD_|LISTENER_|PASS:|FAIL:|PROOF_FAIL|INSTALL_EXIT|intent' \
+            /tmp/pg201553/migration-absent.log 2>/dev/null || true
+          echo "===== unified log matches ====="
+          grep -iE 'could not.*inspect|existing owner|preserved|migration|absent|port could not' \
+            "$O/oslog.txt" 2>/dev/null | tail -15 || true
+
+      - name: Upload migration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg201553-migration-absent
+          path: |
+            /tmp/pg201553/migration-absent/
+            /tmp/pg201553/migration-absent.log
