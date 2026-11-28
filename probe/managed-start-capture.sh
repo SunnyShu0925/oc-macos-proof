@@ -57,16 +57,21 @@ fi
 launchctl bootout "gui/$(id -u)/ai.openclaw.gateway" 2>/dev/null || true
 rm -f "$PLIST"
 # A previous capture's app holds an AppInstanceLock (MenuBar.swift:229) that makes
-# the next launch print "OpenClaw profile is already running" and exit(2). Kill
-# every trace and wait until the lock file is actually released.
-pkill -f "openclaw.mjs gateway" 2>/dev/null || true
-pkill -f "OpenClaw.app/Contents/MacOS/OpenClaw" 2>/dev/null || true
-for w in $(seq 1 10); do
+# the next launch print "OpenClaw profile is already running" and exit(2). Its
+# Gateway child may also still own port 18789, which makes the next capture attach
+# instead of starting its own child. Kill every trace and wait until the port is
+# actually free.
+pkill -9 -f "openclaw.mjs gateway" 2>/dev/null || true
+pkill -9 -f "OpenClaw.app/Contents/MacOS/OpenClaw" 2>/dev/null || true
+pkill -9 -f "OpenClaw.app/Contents/Resources/runtime" 2>/dev/null || true
+for w in $(seq 1 15); do
   remaining=$(pgrep -f "OpenClaw.app/Contents/MacOS/OpenClaw" | wc -l | tr -d ' ')
-  [ "$remaining" -eq 0 ] && break
+  listener=$("$REAL_LSOF" -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | wc -l | tr -d ' ')
+  [ "$remaining" -eq 0 ] && [ "$listener" -eq 0 ] && break
+  pkill -9 -f "OpenClaw.app/Contents/MacOS/OpenClaw" 2>/dev/null || true
+  pkill -9 -f "openclaw.mjs gateway" 2>/dev/null || true
   sleep 1
 done
-# AppInstanceLock (AppProfile.swift:75) lives in /tmp, not the state dir.
 rm -rf "/tmp/openclaw-$(id -u)-app-instances" 2>/dev/null || true
 rm -f "$STATE/.instance.lock" "$STATE/instance.lock" 2>/dev/null || true
 sleep 1
@@ -143,7 +148,9 @@ CHILD_MAX=0
 LISTENER_MAX=0
 for tick in $(seq 1 40); do
   sleep 3
+  # The child is a bun process running openclaw.mjs; match either pattern.
   child=$(pgrep -f "openclaw.mjs gateway" | wc -l | tr -d ' ')
+  child=$((child + $(pgrep -f "OpenClaw.app/Contents/Resources/runtime.*gateway" | wc -l | tr -d ' ')))
   listener=$("$REAL_LSOF" -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | wc -l | tr -d ' ')
   [ "$child" -gt "$CHILD_MAX" ] && CHILD_MAX=$child
   [ "$listener" -gt "$LISTENER_MAX" ] && LISTENER_MAX=$listener
@@ -159,6 +166,7 @@ done
 
 say "observed"
 CHILD_NOW=$(pgrep -f "openclaw.mjs gateway" | wc -l | tr -d ' ')
+CHILD_NOW=$((CHILD_NOW + $(pgrep -f "OpenClaw.app/Contents/Resources/runtime.*gateway" | wc -l | tr -d ' ')))
 LISTENER_NOW=$("$REAL_LSOF" -nP -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | wc -l | tr -d ' ')
 STUB_CALLS=$(wc -l < "$CALLS" | tr -d ' ')
 echo "CHILD_MAX=$CHILD_MAX"
@@ -209,9 +217,10 @@ else
   check "the idle-port child owns the listener" test "$LISTENER_MAX" -ge 1
 fi
 
-pkill -f "OpenClaw.app/Contents/MacOS/OpenClaw" 2>/dev/null || true
-kill "$APP_PID" 2>/dev/null || true
-pkill -f "openclaw.mjs gateway" 2>/dev/null || true
+pkill -9 -f "OpenClaw.app/Contents/MacOS/OpenClaw" 2>/dev/null || true
+kill -9 "$APP_PID" 2>/dev/null || true
+pkill -9 -f "openclaw.mjs gateway" 2>/dev/null || true
+pkill -9 -f "OpenClaw.app/Contents/Resources/runtime" 2>/dev/null || true
 
 echo "PROOF_FAIL=$fail"
 exit "$([ "$fail" -eq 0 ] && echo 0 || echo 1)"
